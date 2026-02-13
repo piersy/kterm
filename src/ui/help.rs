@@ -21,9 +21,9 @@ pub fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
         }
         ViewMode::Detail => "Esc:Back  j/k:Scroll  e:Edit  l:Logs  d:Delete  r:Restart  g/G:Top/Bottom",
         ViewMode::Logs if app.entered_from_search => {
-            "Esc:Back to search  f:Follow  j/k:Scroll  g/G:Top/Bottom"
+            "Esc:Back to search  f:Follow  j/k:Scroll  g/G:Top/Bottom  o:Vim  O:Less"
         }
-        ViewMode::Logs => "Esc:Back  f:Follow  j/k:Scroll  g/G:Top/Bottom",
+        ViewMode::Logs => "Esc:Back  f:Follow  j/k:Scroll  g/G:Top/Bottom  o:Vim  O:Less",
         ViewMode::Confirm(_) => "y:Confirm  Any other key:Cancel",
         ViewMode::Search => "Esc:Back  Down/Up:Nav  Enter:Detail  Type to search...",
     };

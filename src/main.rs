@@ -343,6 +343,34 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                             }
                         });
                     }
+                    InputAction::OpenLogsInEditor => {
+                        if !app.log_lines.is_empty() {
+                            // Suspend terminal for editor
+                            disable_raw_mode()?;
+                            execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+
+                            let _ = open_logs_in_editor(&app.log_lines);
+
+                            // Resume terminal
+                            enable_raw_mode()?;
+                            execute!(terminal.backend_mut(), EnterAlternateScreen)?;
+                            terminal.clear()?;
+                        }
+                    }
+                    InputAction::OpenLogsInLess => {
+                        if !app.log_lines.is_empty() {
+                            // Suspend terminal for less
+                            disable_raw_mode()?;
+                            execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+
+                            let _ = open_logs_in_less(&app.log_lines);
+
+                            // Resume terminal
+                            enable_raw_mode()?;
+                            execute!(terminal.backend_mut(), EnterAlternateScreen)?;
+                            terminal.clear()?;
+                        }
+                    }
                     InputAction::Edit => {
                         if let Some(resource) = app.selected_resource() {
                             let yaml = resource.raw_yaml.clone();
@@ -595,6 +623,45 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
         }
     }
 
+    Ok(())
+}
+
+fn write_logs_to_tempfile(log_lines: &[String]) -> Result<std::path::PathBuf> {
+    use std::io::Write;
+
+    let mut tmp = tempfile::Builder::new()
+        .prefix("kterm-logs-")
+        .suffix(".log")
+        .tempfile()?;
+    for line in log_lines {
+        writeln!(tmp, "{}", line)?;
+    }
+    tmp.flush()?;
+    let (_, path) = tmp.keep()?;
+    Ok(path)
+}
+
+fn open_logs_in_editor(log_lines: &[String]) -> Result<()> {
+    let path = write_logs_to_tempfile(log_lines)?;
+    let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
+
+    std::process::Command::new(&editor)
+        .arg(&path)
+        .status()?;
+
+    let _ = std::fs::remove_file(&path);
+    Ok(())
+}
+
+fn open_logs_in_less(log_lines: &[String]) -> Result<()> {
+    let path = write_logs_to_tempfile(log_lines)?;
+
+    std::process::Command::new("less")
+        .arg("+F")
+        .arg(&path)
+        .status()?;
+
+    let _ = std::fs::remove_file(&path);
     Ok(())
 }
 
