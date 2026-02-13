@@ -5,6 +5,8 @@ mod event;
 mod k8s;
 mod types;
 mod ui;
+#[cfg(test)]
+mod ui_test;
 
 use std::io;
 
