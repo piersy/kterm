@@ -28,18 +28,44 @@ A terminal UI for browsing and managing Kubernetes resources. Navigate clusters,
 
 ## Install
 
-Requires Rust 1.75+ and a valid `~/.kube/config`.
+### Prerequisites
+
+- **Rust 1.75+** -- install via [rustup](https://rustup.rs/)
+- **A valid kubeconfig** at `~/.kube/config` (or `$KUBECONFIG`)
+
+### From crates.io
+
+```sh
+cargo install kterm
+```
+
+### From GitHub
+
+```sh
+cargo install --git https://github.com/piersy/kterm.git
+```
+
+### From source
+
+```sh
+git clone https://github.com/piersy/kterm.git
+cd kterm
+cargo build --release
+```
+
+The binary is at `./target/release/kterm`. Copy it somewhere on your `$PATH`:
+
+```sh
+cp target/release/kterm ~/.local/bin/
+```
+
+### From a local checkout
 
 ```sh
 cargo install --path .
 ```
 
-Or build from source:
-
-```sh
-cargo build --release
-./target/release/kterm
-```
+This builds and installs `kterm` to `~/.cargo/bin/`, which is on your `$PATH` if you used rustup.
 
 ## Usage
 
