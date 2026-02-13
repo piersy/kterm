@@ -516,6 +516,8 @@ impl App {
                 self.log_follow = !self.log_follow;
                 InputAction::None
             }
+            KeyCode::Char('o') => InputAction::OpenLogsInEditor,
+            KeyCode::Char('O') => InputAction::OpenLogsInLess,
             KeyCode::Char('G') => {
                 let lines = self.log_lines.len() as u16;
                 self.log_scroll = lines.saturating_sub(10);
@@ -633,6 +635,8 @@ impl App {
                 self.log_follow = !self.log_follow;
                 InputAction::None
             }
+            KeyCode::Char('o') => InputAction::OpenLogsInEditor,
+            KeyCode::Char('O') => InputAction::OpenLogsInLess,
             KeyCode::Char('G') => {
                 let lines = self.log_lines.len() as u16;
                 self.log_scroll = lines.saturating_sub(10);
@@ -723,6 +727,8 @@ pub enum InputAction {
     Delete,
     Restart,
     Edit,
+    OpenLogsInEditor,
+    OpenLogsInLess,
     StartSearch,
     SearchDescribe,
     SearchStreamLogs,
