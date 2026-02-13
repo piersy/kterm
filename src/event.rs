@@ -2,7 +2,7 @@ use crossterm::event::{EventStream, KeyEvent};
 use futures::StreamExt;
 use tokio::sync::mpsc;
 
-use crate::types::ResourceItem;
+use crate::types::{ResourceItem, ResourceType};
 
 #[derive(Debug)]
 pub enum AppEvent {
@@ -19,6 +19,12 @@ pub enum AppEvent {
         current: String,
     },
     K8sError(String),
+    SearchResultsBatch {
+        context: String,
+        resource_type: ResourceType,
+        items: Vec<ResourceItem>,
+    },
+    SearchScanComplete(String),
 }
 
 pub struct EventHandler {

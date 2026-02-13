@@ -15,6 +15,23 @@ A terminal UI for browsing and managing Kubernetes resources. Navigate clusters,
 +--------------------------------------------------------------------+
 ```
 
+Fuzzy search (`Ctrl+F`) searches across all clusters, namespaces, and resource types:
+
+```
++--------------------------------------------------------------------+
+| Search (Ctrl+F)                                                    |
+| op-geth█                                                           |
++--------------------------------------------------------------------+
+| NAME               | TYPE   | NAMESPACE  | CLUSTER                 |
+|--------------------------------------------------------------------|
+| > op-geth-node-0   | Pods   | ethereum   | gke-prod                |
+|   op-geth-node-1   | Pods   | ethereum   | gke-prod                |
+|   op-geth-node-0   | Pods   | ethereum   | gke-staging             |
++--------------------------------------------------------------------+
+| Esc:Back  Down/Up:Nav  Enter:Detail  Type to search...             |
++--------------------------------------------------------------------+
+```
+
 ## Features
 
 - **Multi-cluster support** -- switch between kubeconfig contexts on the fly
@@ -23,6 +40,7 @@ A terminal UI for browsing and managing Kubernetes resources. Navigate clusters,
 - **Detail view** -- formatted description with conditions, containers, events, and full YAML
 - **Log streaming** -- tail pod logs with follow mode, scroll through history
 - **Actions** -- delete, restart (rollout restart for StatefulSets), edit YAML in `$EDITOR`
+- **Fuzzy search** -- `Ctrl+F` to search across all clusters, namespaces, and resource types at once; results show name, type, namespace, and cluster side by side
 - **Filtering** -- search resources by name with `/`
 - **Color-coded status** -- green for Running/Bound, yellow for Pending, red for Failed/CrashLoopBackOff
 
@@ -83,6 +101,7 @@ The app reads your kubeconfig and connects to the current context. If no cluster
 |-----|--------|
 | `q` / `Ctrl+c` | Quit (or back from subview) |
 | `Tab` / `Shift+Tab` | Cycle focus: Context -> Namespace -> Type -> List |
+| `Ctrl+f` | Open fuzzy search across all clusters |
 | `?` | Help overlay |
 
 ### Selector focused (Context / Namespace / Type)
@@ -104,6 +123,18 @@ The app reads your kubeconfig and connects to the current context. If no cluster
 | `r` | Restart (with confirmation) |
 | `e` | Edit YAML in `$EDITOR` |
 | `/` | Filter by name |
+| `Ctrl+f` | Fuzzy search all clusters |
+
+### Fuzzy search view
+
+| Key | Action |
+|-----|--------|
+| `Esc` | Back to list |
+| `Down` / `Tab` | Move selection down |
+| `Up` / `Shift+Tab` | Move selection up |
+| `Enter` | Open detail view for selected result |
+| Type | Filter results with fuzzy matching |
+| `Backspace` | Remove last character from search |
 
 ### Detail view
 
@@ -141,6 +172,7 @@ src/
     detail.rs         Scrollable description panel
     logs.rs           Log viewer with follow mode
     help.rs           Footer keybindings, confirmation dialog
+    search.rs         Fuzzy search full-screen view
   k8s/
     mod.rs            Re-exports
     client.rs         K8sManager: kubeconfig, context switching
@@ -160,9 +192,9 @@ The event loop multiplexes three sources into a single `tokio::sync::mpsc` chann
 cargo test
 ```
 
-65 tests:
-- **34 unit tests** -- key handling, state transitions, type logic (`src/app_test.rs`)
-- **31 integration tests** -- full UI rendering via ratatui `TestBackend`, verifying rendered output for all views and navigation flows (`src/ui_test.rs`)
+102 tests:
+- **56 unit tests** -- key handling, state transitions, type logic, fuzzy search (`src/app_test.rs`)
+- **46 integration tests** -- full UI rendering via ratatui `TestBackend`, verifying rendered output for all views, search, and navigation flows (`src/ui_test.rs`)
 
 ## Stack
 

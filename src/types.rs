@@ -57,6 +57,7 @@ pub enum ViewMode {
     Detail,
     Logs,
     Confirm(ConfirmAction),
+    Search,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -151,5 +152,58 @@ impl ResourceItem {
             .find(|(k, _)| k == key)
             .map(|(_, v)| v.clone())
             .unwrap_or_else(|| "<none>".to_string())
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct SearchResult {
+    pub resource: ResourceItem,
+    pub context: String,
+    pub resource_type: ResourceType,
+}
+
+/// Fuzzy subsequence match. Returns a score if all characters in `query`
+/// appear in order within `target`, or None if they don't.
+pub fn fuzzy_match(query: &str, target: &str) -> Option<i64> {
+    let query_lower: Vec<char> = query.to_lowercase().chars().collect();
+    let target_lower: Vec<char> = target.to_lowercase().chars().collect();
+
+    if query_lower.is_empty() {
+        return Some(0);
+    }
+
+    let mut qi = 0;
+    let mut score: i64 = 0;
+    let mut prev_matched = false;
+
+    for (ti, &tc) in target_lower.iter().enumerate() {
+        if qi < query_lower.len() && tc == query_lower[qi] {
+            score += 1;
+            // Consecutive match bonus
+            if prev_matched {
+                score += 2;
+            }
+            // Word boundary bonus (start of string, after - or _ or /)
+            if ti == 0
+                || matches!(
+                    target_lower.get(ti.wrapping_sub(1)),
+                    Some('-') | Some('_') | Some('/')
+                )
+            {
+                score += 3;
+            }
+            prev_matched = true;
+            qi += 1;
+        } else {
+            prev_matched = false;
+        }
+    }
+
+    if qi == query_lower.len() {
+        // Bonus for shorter targets (more precise match)
+        score += (100 - target_lower.len() as i64).max(0);
+        Some(score)
+    } else {
+        None
     }
 }

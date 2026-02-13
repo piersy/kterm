@@ -1,7 +1,9 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::widgets::TableState;
 
-use crate::types::{ConfirmAction, Focus, ResourceItem, ResourceType, ViewMode};
+use crate::types::{
+    fuzzy_match, ConfirmAction, Focus, ResourceItem, ResourceType, SearchResult, ViewMode,
+};
 
 pub struct App {
     // Navigation
@@ -36,6 +38,16 @@ pub struct App {
     // Error
     pub error_message: Option<String>,
     pub error_ticks: u8,
+
+    // Search
+    pub search_query: String,
+    pub search_results: Vec<SearchResult>,
+    pub search_filtered: Vec<usize>,
+    pub search_table_state: TableState,
+    pub search_loading: bool,
+    pub search_contexts_total: usize,
+    pub search_contexts_done: usize,
+    pub entered_from_search: bool,
 
     // Quit
     pub should_quit: bool,
@@ -72,6 +84,15 @@ impl App {
 
             error_message: None,
             error_ticks: 0,
+
+            search_query: String::new(),
+            search_results: Vec::new(),
+            search_filtered: Vec::new(),
+            search_table_state: TableState::default(),
+            search_loading: false,
+            search_contexts_total: 0,
+            search_contexts_done: 0,
+            entered_from_search: false,
 
             should_quit: false,
         }
@@ -112,6 +133,35 @@ impl App {
         }
     }
 
+    pub fn selected_search_result(&self) -> Option<&SearchResult> {
+        let idx = self.search_table_state.selected()?;
+        let &filtered_idx = self.search_filtered.get(idx)?;
+        self.search_results.get(filtered_idx)
+    }
+
+    pub fn update_search_filter(&mut self) {
+        if self.search_query.is_empty() {
+            self.search_filtered = (0..self.search_results.len()).collect();
+        } else {
+            let mut scored: Vec<(usize, i64)> = self
+                .search_results
+                .iter()
+                .enumerate()
+                .filter_map(|(i, r)| {
+                    fuzzy_match(&self.search_query, &r.resource.name).map(|score| (i, score))
+                })
+                .collect();
+            scored.sort_by(|a, b| b.1.cmp(&a.1));
+            self.search_filtered = scored.into_iter().map(|(i, _)| i).collect();
+        }
+        // Reset selection to top
+        if self.search_filtered.is_empty() {
+            self.search_table_state.select(None);
+        } else {
+            self.search_table_state.select(Some(0));
+        }
+    }
+
     pub fn handle_tick(&mut self) {
         if let Some(ref _msg) = self.error_message {
             self.error_ticks += 1;
@@ -136,6 +186,21 @@ impl App {
             return InputAction::None;
         }
 
+        // Global Ctrl+F to enter search (from List or selector views, not from other modes)
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('f') {
+            if self.view_mode == ViewMode::List {
+                self.view_mode = ViewMode::Search;
+                self.search_query.clear();
+                self.search_results.clear();
+                self.search_filtered.clear();
+                self.search_table_state.select(None);
+                self.search_loading = true;
+                self.search_contexts_done = 0;
+                self.entered_from_search = false;
+                return InputAction::StartSearch;
+            }
+        }
+
         // Filter mode input
         if self.filter_active {
             return self.handle_filter_input(key);
@@ -148,9 +213,12 @@ impl App {
 
         match self.view_mode {
             ViewMode::List => self.handle_list_input(key),
+            ViewMode::Detail if self.entered_from_search => self.handle_search_detail_input(key),
             ViewMode::Detail => self.handle_detail_input(key),
+            ViewMode::Logs if self.entered_from_search => self.handle_search_logs_input(key),
             ViewMode::Logs => self.handle_logs_input(key),
             ViewMode::Confirm(_) => unreachable!(),
+            ViewMode::Search => self.handle_search_input(key),
         }
     }
 
@@ -473,6 +541,149 @@ impl App {
         }
     }
 
+    fn handle_search_input(&mut self, key: KeyEvent) -> InputAction {
+        match key.code {
+            KeyCode::Esc => {
+                self.view_mode = ViewMode::List;
+                self.entered_from_search = false;
+                InputAction::None
+            }
+            KeyCode::Backspace => {
+                self.search_query.pop();
+                self.update_search_filter();
+                InputAction::None
+            }
+            KeyCode::Char(c) => {
+                self.search_query.push(c);
+                self.update_search_filter();
+                InputAction::None
+            }
+            KeyCode::Down | KeyCode::Tab => {
+                self.search_select_next();
+                InputAction::None
+            }
+            KeyCode::Up | KeyCode::BackTab => {
+                self.search_select_prev();
+                InputAction::None
+            }
+            KeyCode::Enter => {
+                if self.selected_search_result().is_some() {
+                    self.view_mode = ViewMode::Detail;
+                    self.entered_from_search = true;
+                    self.detail_scroll = 0;
+                    self.detail_text.clear();
+                    InputAction::SearchDescribe
+                } else {
+                    InputAction::None
+                }
+            }
+            _ => InputAction::None,
+        }
+    }
+
+    fn handle_search_detail_input(&mut self, key: KeyEvent) -> InputAction {
+        match key.code {
+            KeyCode::Char('q') | KeyCode::Esc => {
+                self.view_mode = ViewMode::Search;
+                InputAction::None
+            }
+            KeyCode::Char('j') | KeyCode::Down => {
+                self.detail_scroll = self.detail_scroll.saturating_add(1);
+                InputAction::None
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                self.detail_scroll = self.detail_scroll.saturating_sub(1);
+                InputAction::None
+            }
+            KeyCode::Char('G') => {
+                let lines = self.detail_text.lines().count() as u16;
+                self.detail_scroll = lines.saturating_sub(10);
+                InputAction::None
+            }
+            KeyCode::Char('g') => {
+                self.detail_scroll = 0;
+                InputAction::None
+            }
+            KeyCode::Char('l') => {
+                if let Some(result) = self.selected_search_result() {
+                    if result.resource_type == ResourceType::Pods {
+                        self.view_mode = ViewMode::Logs;
+                        self.log_lines.clear();
+                        self.log_scroll = 0;
+                        self.log_follow = true;
+                        InputAction::SearchStreamLogs
+                    } else {
+                        InputAction::None
+                    }
+                } else {
+                    InputAction::None
+                }
+            }
+            _ => InputAction::None,
+        }
+    }
+
+    fn handle_search_logs_input(&mut self, key: KeyEvent) -> InputAction {
+        match key.code {
+            KeyCode::Char('q') | KeyCode::Esc => {
+                self.view_mode = ViewMode::Search;
+                InputAction::StopLogs
+            }
+            KeyCode::Char('f') => {
+                self.log_follow = !self.log_follow;
+                InputAction::None
+            }
+            KeyCode::Char('G') => {
+                let lines = self.log_lines.len() as u16;
+                self.log_scroll = lines.saturating_sub(10);
+                self.log_follow = true;
+                InputAction::None
+            }
+            KeyCode::Char('g') => {
+                self.log_scroll = 0;
+                self.log_follow = false;
+                InputAction::None
+            }
+            KeyCode::Char('j') | KeyCode::Down => {
+                self.log_scroll = self.log_scroll.saturating_add(1);
+                self.log_follow = false;
+                InputAction::None
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                self.log_scroll = self.log_scroll.saturating_sub(1);
+                self.log_follow = false;
+                InputAction::None
+            }
+            _ => InputAction::None,
+        }
+    }
+
+    fn search_select_next(&mut self) {
+        let len = self.search_filtered.len();
+        if len == 0 {
+            return;
+        }
+        let i = self
+            .search_table_state
+            .selected()
+            .map(|i| (i + 1) % len)
+            .unwrap_or(0);
+        self.search_table_state.select(Some(i));
+    }
+
+    fn search_select_prev(&mut self) {
+        let len = self.search_filtered.len();
+        if len == 0 {
+            return;
+        }
+        let i = self
+            .search_table_state
+            .selected()
+            .map(|i| if i == 0 { len - 1 } else { i - 1 })
+            .unwrap_or(0);
+        self.search_table_state.select(Some(i));
+    }
+
     fn select_next(&mut self) {
         let len = self.filtered_resources().len();
         if len == 0 {
@@ -512,4 +723,7 @@ pub enum InputAction {
     Delete,
     Restart,
     Edit,
+    StartSearch,
+    SearchDescribe,
+    SearchStreamLogs,
 }

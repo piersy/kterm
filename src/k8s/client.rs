@@ -55,6 +55,18 @@ impl K8sManager {
         Ok(())
     }
 
+    pub async fn client_for_context(context_name: &str) -> Result<Client> {
+        let _kubeconfig = Kubeconfig::read().context("Failed to read kubeconfig")?;
+        let config = Config::from_kubeconfig(&KubeConfigOptions {
+            context: Some(context_name.to_string()),
+            ..Default::default()
+        })
+        .await
+        .context("Failed to create config for context")?;
+
+        Client::try_from(config).context("Failed to create client for context")
+    }
+
     pub async fn list_namespaces(&self) -> Result<Vec<String>> {
         let ns_api: Api<Namespace> = Api::all(self.client.clone());
         let ns_list = ns_api

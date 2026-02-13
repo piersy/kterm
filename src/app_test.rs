@@ -510,4 +510,335 @@ mod tests {
         assert_eq!(app.view_mode, ViewMode::List);
         assert!(!app.should_quit);
     }
+
+    // --- Fuzzy Search Tests ---
+
+    use crate::types::{fuzzy_match, SearchResult};
+
+    fn fake_search_result(name: &str, ns: &str, ctx: &str, rt: ResourceType) -> SearchResult {
+        SearchResult {
+            resource: ResourceItem {
+                name: name.to_string(),
+                namespace: ns.to_string(),
+                status: "Running".to_string(),
+                age: "1h".to_string(),
+                extra: vec![
+                    ("restarts".to_string(), "0".to_string()),
+                    ("node".to_string(), "node-a".to_string()),
+                ],
+                raw_yaml: String::new(),
+            },
+            context: ctx.to_string(),
+            resource_type: rt,
+        }
+    }
+
+    fn app_with_search_results() -> App {
+        let mut app = App::new();
+        app.contexts = vec!["gke-prod".to_string(), "gke-staging".to_string()];
+        app.view_mode = ViewMode::Search;
+        app.search_results = vec![
+            fake_search_result("op-geth-node-0", "ethereum", "gke-prod", ResourceType::Pods),
+            fake_search_result("op-geth-node-1", "ethereum", "gke-prod", ResourceType::Pods),
+            fake_search_result("op-geth-node-0", "ethereum", "gke-staging", ResourceType::Pods),
+            fake_search_result("redis-master-0", "cache", "gke-prod", ResourceType::Pods),
+            fake_search_result("nginx-ingress", "default", "gke-prod", ResourceType::StatefulSets),
+        ];
+        app.update_search_filter();
+        app
+    }
+
+    #[test]
+    fn test_ctrl_f_enters_search_mode() {
+        let mut app = app_with_pods();
+        app.contexts = vec!["ctx-1".to_string()];
+        let action = app.handle_input(key_with_mod(KeyCode::Char('f'), KeyModifiers::CONTROL));
+        assert_eq!(action, InputAction::StartSearch);
+        assert_eq!(app.view_mode, ViewMode::Search);
+        assert!(app.search_query.is_empty());
+        assert!(app.search_loading);
+    }
+
+    #[test]
+    fn test_ctrl_f_does_nothing_in_detail_view() {
+        let mut app = app_with_pods();
+        app.view_mode = ViewMode::Detail;
+        let action = app.handle_input(key_with_mod(KeyCode::Char('f'), KeyModifiers::CONTROL));
+        assert_eq!(action, InputAction::None);
+        assert_eq!(app.view_mode, ViewMode::Detail);
+    }
+
+    #[test]
+    fn test_search_typing_updates_query() {
+        let mut app = app_with_search_results();
+
+        app.handle_input(key(KeyCode::Char('o')));
+        assert_eq!(app.search_query, "o");
+
+        app.handle_input(key(KeyCode::Char('p')));
+        assert_eq!(app.search_query, "op");
+
+        app.handle_input(key(KeyCode::Char('-')));
+        assert_eq!(app.search_query, "op-");
+    }
+
+    #[test]
+    fn test_search_backspace_removes_char() {
+        let mut app = app_with_search_results();
+        app.search_query = "op-geth".to_string();
+        app.update_search_filter();
+
+        app.handle_input(key(KeyCode::Backspace));
+        assert_eq!(app.search_query, "op-get");
+
+        app.handle_input(key(KeyCode::Backspace));
+        assert_eq!(app.search_query, "op-ge");
+    }
+
+    #[test]
+    fn test_search_esc_returns_to_list() {
+        let mut app = app_with_search_results();
+        app.handle_input(key(KeyCode::Esc));
+        assert_eq!(app.view_mode, ViewMode::List);
+        assert!(!app.entered_from_search);
+    }
+
+    #[test]
+    fn test_search_filter_narrows_results() {
+        let mut app = app_with_search_results();
+
+        // Empty query shows all results
+        assert_eq!(app.search_filtered.len(), 5);
+
+        // Type "op-geth" to narrow down
+        app.search_query = "op-geth".to_string();
+        app.update_search_filter();
+        assert_eq!(app.search_filtered.len(), 3);
+
+        // Type "redis" to switch
+        app.search_query = "redis".to_string();
+        app.update_search_filter();
+        assert_eq!(app.search_filtered.len(), 1);
+        let result = app.selected_search_result().unwrap();
+        assert_eq!(result.resource.name, "redis-master-0");
+    }
+
+    #[test]
+    fn test_search_no_matches() {
+        let mut app = app_with_search_results();
+        app.search_query = "zzzzz".to_string();
+        app.update_search_filter();
+        assert_eq!(app.search_filtered.len(), 0);
+        assert!(app.selected_search_result().is_none());
+    }
+
+    #[test]
+    fn test_search_navigate_down_up() {
+        let mut app = app_with_search_results();
+        assert_eq!(app.search_table_state.selected(), Some(0));
+
+        app.handle_input(key(KeyCode::Down));
+        assert_eq!(app.search_table_state.selected(), Some(1));
+
+        app.handle_input(key(KeyCode::Down));
+        assert_eq!(app.search_table_state.selected(), Some(2));
+
+        app.handle_input(key(KeyCode::Up));
+        assert_eq!(app.search_table_state.selected(), Some(1));
+    }
+
+    #[test]
+    fn test_search_navigate_wraps() {
+        let mut app = app_with_search_results();
+        // 5 results, go up from 0 wraps to 4
+        app.handle_input(key(KeyCode::Up));
+        assert_eq!(app.search_table_state.selected(), Some(4));
+
+        // Go down from 4 wraps to 0
+        app.handle_input(key(KeyCode::Down));
+        assert_eq!(app.search_table_state.selected(), Some(0));
+    }
+
+    #[test]
+    fn test_search_enter_opens_detail() {
+        let mut app = app_with_search_results();
+        let action = app.handle_input(key(KeyCode::Enter));
+        assert_eq!(action, InputAction::SearchDescribe);
+        assert_eq!(app.view_mode, ViewMode::Detail);
+        assert!(app.entered_from_search);
+    }
+
+    #[test]
+    fn test_search_enter_on_empty_does_nothing() {
+        let mut app = App::new();
+        app.view_mode = ViewMode::Search;
+        let action = app.handle_input(key(KeyCode::Enter));
+        assert_eq!(action, InputAction::None);
+        assert_eq!(app.view_mode, ViewMode::Search);
+    }
+
+    #[test]
+    fn test_search_detail_esc_returns_to_search() {
+        let mut app = app_with_search_results();
+        app.view_mode = ViewMode::Detail;
+        app.entered_from_search = true;
+
+        app.handle_input(key(KeyCode::Esc));
+        assert_eq!(app.view_mode, ViewMode::Search);
+    }
+
+    #[test]
+    fn test_search_detail_q_returns_to_search() {
+        let mut app = app_with_search_results();
+        app.view_mode = ViewMode::Detail;
+        app.entered_from_search = true;
+
+        app.handle_input(key(KeyCode::Char('q')));
+        assert_eq!(app.view_mode, ViewMode::Search);
+        assert!(!app.should_quit);
+    }
+
+    #[test]
+    fn test_search_detail_scroll() {
+        let mut app = app_with_search_results();
+        app.view_mode = ViewMode::Detail;
+        app.entered_from_search = true;
+        app.detail_text = "line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\nline9\nline10\nline11\nline12".to_string();
+
+        app.handle_input(key(KeyCode::Char('j')));
+        assert_eq!(app.detail_scroll, 1);
+
+        app.handle_input(key(KeyCode::Char('k')));
+        assert_eq!(app.detail_scroll, 0);
+
+        app.handle_input(key(KeyCode::Char('G')));
+        assert!(app.detail_scroll > 0);
+
+        app.handle_input(key(KeyCode::Char('g')));
+        assert_eq!(app.detail_scroll, 0);
+    }
+
+    #[test]
+    fn test_search_detail_logs_for_pods() {
+        let mut app = app_with_search_results();
+        app.view_mode = ViewMode::Detail;
+        app.entered_from_search = true;
+
+        let action = app.handle_input(key(KeyCode::Char('l')));
+        assert_eq!(action, InputAction::SearchStreamLogs);
+        assert_eq!(app.view_mode, ViewMode::Logs);
+        assert!(app.entered_from_search);
+    }
+
+    #[test]
+    fn test_search_logs_esc_returns_to_search() {
+        let mut app = app_with_search_results();
+        app.view_mode = ViewMode::Logs;
+        app.entered_from_search = true;
+
+        let action = app.handle_input(key(KeyCode::Esc));
+        assert_eq!(action, InputAction::StopLogs);
+        assert_eq!(app.view_mode, ViewMode::Search);
+    }
+
+    #[test]
+    fn test_search_logs_follow_toggle() {
+        let mut app = app_with_search_results();
+        app.view_mode = ViewMode::Logs;
+        app.entered_from_search = true;
+        assert!(app.log_follow);
+
+        app.handle_input(key(KeyCode::Char('f')));
+        assert!(!app.log_follow);
+
+        app.handle_input(key(KeyCode::Char('f')));
+        assert!(app.log_follow);
+    }
+
+    #[test]
+    fn test_search_results_across_contexts() {
+        let mut app = app_with_search_results();
+        app.search_query = "op-geth-node-0".to_string();
+        app.update_search_filter();
+
+        // Should find 2 results (one per cluster)
+        assert_eq!(app.search_filtered.len(), 2);
+
+        let r0 = &app.search_results[app.search_filtered[0]];
+        let r1 = &app.search_results[app.search_filtered[1]];
+        assert_eq!(r0.resource.name, "op-geth-node-0");
+        assert_eq!(r1.resource.name, "op-geth-node-0");
+        // Different clusters
+        assert_ne!(r0.context, r1.context);
+    }
+
+    #[test]
+    fn test_fuzzy_match_basic() {
+        // Exact match
+        assert!(fuzzy_match("pod", "pod").is_some());
+
+        // Substring
+        assert!(fuzzy_match("pod", "my-pod-0").is_some());
+
+        // Subsequence
+        assert!(fuzzy_match("ogn0", "op-geth-node-0").is_some());
+
+        // No match
+        assert!(fuzzy_match("xyz", "pod").is_none());
+
+        // Empty query matches everything
+        assert!(fuzzy_match("", "anything").is_some());
+    }
+
+    #[test]
+    fn test_fuzzy_match_case_insensitive() {
+        assert!(fuzzy_match("POD", "pod-0").is_some());
+        assert!(fuzzy_match("pod", "POD-0").is_some());
+    }
+
+    #[test]
+    fn test_fuzzy_match_scoring_prefers_exact() {
+        let exact_score = fuzzy_match("pod", "pod").unwrap();
+        let partial_score = fuzzy_match("pod", "my-pod-long-name").unwrap();
+        // Exact/shorter match should score higher (shorter target bonus)
+        assert!(exact_score > partial_score);
+    }
+
+    #[test]
+    fn test_full_search_flow() {
+        let mut app = app_with_pods();
+        app.contexts = vec!["ctx-1".to_string()];
+
+        // Enter search
+        let action = app.handle_input(key_with_mod(KeyCode::Char('f'), KeyModifiers::CONTROL));
+        assert_eq!(action, InputAction::StartSearch);
+        assert_eq!(app.view_mode, ViewMode::Search);
+
+        // Simulate results arriving
+        app.search_results = vec![
+            fake_search_result("op-geth-node-0", "eth", "ctx-1", ResourceType::Pods),
+            fake_search_result("redis-0", "cache", "ctx-1", ResourceType::Pods),
+        ];
+        app.update_search_filter();
+        assert_eq!(app.search_filtered.len(), 2);
+
+        // Type search query
+        app.handle_input(key(KeyCode::Char('o')));
+        app.handle_input(key(KeyCode::Char('p')));
+        assert_eq!(app.search_filtered.len(), 1);
+
+        // Enter detail
+        let action = app.handle_input(key(KeyCode::Enter));
+        assert_eq!(action, InputAction::SearchDescribe);
+        assert_eq!(app.view_mode, ViewMode::Detail);
+        assert!(app.entered_from_search);
+
+        // Go back to search
+        app.handle_input(key(KeyCode::Esc));
+        assert_eq!(app.view_mode, ViewMode::Search);
+
+        // Exit search
+        app.handle_input(key(KeyCode::Esc));
+        assert_eq!(app.view_mode, ViewMode::List);
+    }
 }
