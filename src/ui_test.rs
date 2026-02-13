@@ -601,4 +601,287 @@ mod tests {
         // Should not panic, and should contain at least some content
         assert!(!output.is_empty());
     }
+
+    // --- Search View Rendering ---
+
+    use crate::types::SearchResult;
+
+    fn app_with_search() -> App {
+        let mut app = App::new();
+        app.view_mode = ViewMode::Search;
+        app.contexts = vec!["gke-prod".to_string(), "gke-staging".to_string()];
+        app.search_results = vec![
+            SearchResult {
+                resource: ResourceItem {
+                    name: "op-geth-node-0".to_string(),
+                    namespace: "ethereum".to_string(),
+                    status: "Running".to_string(),
+                    age: "1h".to_string(),
+                    extra: vec![],
+                    raw_yaml: String::new(),
+                },
+                context: "gke-prod".to_string(),
+                resource_type: ResourceType::Pods,
+            },
+            SearchResult {
+                resource: ResourceItem {
+                    name: "op-geth-node-0".to_string(),
+                    namespace: "ethereum".to_string(),
+                    status: "Running".to_string(),
+                    age: "2h".to_string(),
+                    extra: vec![],
+                    raw_yaml: String::new(),
+                },
+                context: "gke-staging".to_string(),
+                resource_type: ResourceType::Pods,
+            },
+            SearchResult {
+                resource: ResourceItem {
+                    name: "redis-master-0".to_string(),
+                    namespace: "cache".to_string(),
+                    status: "Running".to_string(),
+                    age: "3d".to_string(),
+                    extra: vec![],
+                    raw_yaml: String::new(),
+                },
+                context: "gke-prod".to_string(),
+                resource_type: ResourceType::StatefulSets,
+            },
+        ];
+        app.update_search_filter();
+        app
+    }
+
+    #[test]
+    fn test_search_view_renders_search_input() {
+        let mut app = app_with_search();
+        let output = render_to_string(&mut app, 100, 24);
+
+        assert!(
+            output.contains("Search"),
+            "Search view should show search input box, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_search_view_renders_column_headers() {
+        let mut app = app_with_search();
+        let output = render_to_string(&mut app, 100, 24);
+
+        assert!(
+            output.contains("NAME"),
+            "Search results should show NAME column"
+        );
+        assert!(
+            output.contains("TYPE"),
+            "Search results should show TYPE column"
+        );
+        assert!(
+            output.contains("NAMESPACE"),
+            "Search results should show NAMESPACE column"
+        );
+        assert!(
+            output.contains("CLUSTER"),
+            "Search results should show CLUSTER column"
+        );
+    }
+
+    #[test]
+    fn test_search_view_renders_resource_names() {
+        let mut app = app_with_search();
+        let output = render_to_string(&mut app, 100, 24);
+
+        assert!(
+            output.contains("op-geth-node-0"),
+            "Search results should show resource name, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("redis-master-0"),
+            "Search results should show all matching resources"
+        );
+    }
+
+    #[test]
+    fn test_search_view_renders_namespaces() {
+        let mut app = app_with_search();
+        let output = render_to_string(&mut app, 100, 24);
+
+        assert!(
+            output.contains("ethereum"),
+            "Search results should show namespace"
+        );
+        assert!(
+            output.contains("cache"),
+            "Search results should show namespace for all results"
+        );
+    }
+
+    #[test]
+    fn test_search_view_renders_cluster_names() {
+        let mut app = app_with_search();
+        let output = render_to_string(&mut app, 100, 24);
+
+        assert!(
+            output.contains("gke-prod"),
+            "Search results should show cluster name"
+        );
+        assert!(
+            output.contains("gke-staging"),
+            "Search results should show all cluster names"
+        );
+    }
+
+    #[test]
+    fn test_search_view_renders_resource_types() {
+        let mut app = app_with_search();
+        // Use wider terminal to ensure all columns render
+        let output = render_to_string(&mut app, 120, 24);
+
+        assert!(
+            output.contains("Pods"),
+            "Search results should show resource type, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("StatefulSets"),
+            "Search results should show StatefulSets type"
+        );
+    }
+
+    #[test]
+    fn test_search_view_shows_result_count() {
+        let mut app = app_with_search();
+        let output = render_to_string(&mut app, 100, 24);
+
+        assert!(
+            output.contains("3 found"),
+            "Search results should show count, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_search_view_shows_scanning_indicator() {
+        let mut app = app_with_search();
+        app.search_loading = true;
+        app.search_contexts_total = 3;
+        app.search_contexts_done = 1;
+
+        let output = render_to_string(&mut app, 100, 24);
+
+        assert!(
+            output.contains("scanning"),
+            "Should show scanning indicator when loading, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_search_view_shows_search_query() {
+        let mut app = app_with_search();
+        app.search_query = "op-geth".to_string();
+        app.update_search_filter();
+
+        let output = render_to_string(&mut app, 100, 24);
+
+        assert!(
+            output.contains("op-geth"),
+            "Search input should show current query, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_search_view_no_header_selectors() {
+        let mut app = app_with_search();
+        let output = render_to_string(&mut app, 100, 24);
+
+        // Search view should NOT show the normal header selectors
+        assert!(
+            !output.contains("Context"),
+            "Search view should not show Context selector"
+        );
+    }
+
+    #[test]
+    fn test_search_view_footer() {
+        let mut app = app_with_search();
+        let output = render_to_string(&mut app, 100, 24);
+
+        assert!(
+            output.contains("Esc:Back"),
+            "Search footer should show Esc:Back"
+        );
+        assert!(
+            output.contains("Enter:Detail"),
+            "Search footer should show Enter:Detail"
+        );
+    }
+
+    #[test]
+    fn test_search_detail_view_full_screen() {
+        let mut app = app_with_search();
+        app.view_mode = ViewMode::Detail;
+        app.entered_from_search = true;
+        app.detail_text = "Name: op-geth-node-0\nNamespace: ethereum\nStatus: Running".to_string();
+
+        let output = render_to_string(&mut app, 100, 24);
+
+        assert!(
+            output.contains("op-geth-node-0"),
+            "Search detail should show resource name"
+        );
+        assert!(
+            output.contains("Back to search"),
+            "Search detail footer should mention back to search, got:\n{}",
+            output
+        );
+        // Should NOT show header selectors
+        assert!(
+            !output.contains("Context"),
+            "Search detail should not show Context selector"
+        );
+    }
+
+    #[test]
+    fn test_search_logs_view_full_screen() {
+        let mut app = app_with_search();
+        app.view_mode = ViewMode::Logs;
+        app.entered_from_search = true;
+        app.log_lines = vec!["INFO Starting".to_string()];
+
+        let output = render_to_string(&mut app, 100, 24);
+
+        assert!(
+            output.contains("Starting"),
+            "Search logs should show log lines"
+        );
+        assert!(
+            output.contains("Back to search"),
+            "Search logs footer should mention back to search, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_search_empty_results_renders_without_panic() {
+        let mut app = App::new();
+        app.view_mode = ViewMode::Search;
+        // Should not panic with empty results
+        let output = render_to_string(&mut app, 100, 24);
+        assert!(
+            output.contains("Search"),
+            "Should render search view with empty results"
+        );
+    }
+
+    #[test]
+    fn test_search_renders_at_minimum_size() {
+        let mut app = app_with_search();
+        // Should not panic at minimum size
+        let output = render_to_string(&mut app, 40, 16);
+        assert!(!output.is_empty());
+    }
 }

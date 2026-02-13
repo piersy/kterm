@@ -384,6 +384,138 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                             }
                         }
                     }
+                    InputAction::StartSearch => {
+                        let contexts = app.contexts.clone();
+                        app.search_contexts_total = contexts.len();
+                        app.search_contexts_done = 0;
+
+                        for context in contexts {
+                            let ctx = context.clone();
+                            let search_tx = tx.clone();
+                            tokio::spawn(async move {
+                                match k8s::client::K8sManager::client_for_context(&ctx).await {
+                                    Ok(client) => {
+                                        for rt in types::ResourceType::ALL.iter() {
+                                            let rt = *rt;
+                                            match k8s::resources::list_all_resources(
+                                                client.clone(),
+                                                rt,
+                                            )
+                                            .await
+                                            {
+                                                Ok(items) => {
+                                                    let _ = search_tx.send(
+                                                        AppEvent::SearchResultsBatch {
+                                                            context: ctx.clone(),
+                                                            resource_type: rt,
+                                                            items,
+                                                        },
+                                                    );
+                                                }
+                                                Err(e) => {
+                                                    let _ = search_tx.send(AppEvent::K8sError(
+                                                        format!(
+                                                            "Search {}/{}: {}",
+                                                            ctx, rt, e
+                                                        ),
+                                                    ));
+                                                }
+                                            }
+                                        }
+                                    }
+                                    Err(e) => {
+                                        let _ = search_tx.send(AppEvent::K8sError(format!(
+                                            "Connect to {}: {}",
+                                            ctx, e
+                                        )));
+                                    }
+                                }
+                                let _ =
+                                    search_tx.send(AppEvent::SearchScanComplete(ctx));
+                            });
+                        }
+                    }
+                    InputAction::SearchDescribe => {
+                        if let Some(result) = app.selected_search_result().cloned() {
+                            let action_tx = tx.clone();
+                            app.loading = true;
+
+                            tokio::spawn(async move {
+                                match k8s::client::K8sManager::client_for_context(
+                                    &result.context,
+                                )
+                                .await
+                                {
+                                    Ok(client) => {
+                                        match k8s::resources::describe_resource(
+                                            client,
+                                            &result.resource.namespace,
+                                            &result.resource.name,
+                                            result.resource_type,
+                                        )
+                                        .await
+                                        {
+                                            Ok(desc) => {
+                                                let _ = action_tx
+                                                    .send(AppEvent::DetailLoaded(desc));
+                                            }
+                                            Err(e) => {
+                                                let _ =
+                                                    action_tx.send(AppEvent::K8sError(format!(
+                                                        "Describe error: {}",
+                                                        e
+                                                    )));
+                                            }
+                                        }
+                                    }
+                                    Err(e) => {
+                                        let _ = action_tx.send(AppEvent::K8sError(format!(
+                                            "Connect to {}: {}",
+                                            result.context, e
+                                        )));
+                                    }
+                                }
+                            });
+                        }
+                    }
+                    InputAction::SearchStreamLogs => {
+                        if let Some(result) = app.selected_search_result().cloned() {
+                            let action_tx = tx.clone();
+                            app.loading = true;
+
+                            tokio::spawn(async move {
+                                match k8s::client::K8sManager::client_for_context(
+                                    &result.context,
+                                )
+                                .await
+                                {
+                                    Ok(client) => {
+                                        if let Err(e) = k8s::logs::stream_pod_logs(
+                                            client,
+                                            &result.resource.namespace,
+                                            &result.resource.name,
+                                            None,
+                                            action_tx.clone(),
+                                        )
+                                        .await
+                                        {
+                                            let _ =
+                                                action_tx.send(AppEvent::K8sError(format!(
+                                                    "Log stream error: {}",
+                                                    e
+                                                )));
+                                        }
+                                    }
+                                    Err(e) => {
+                                        let _ = action_tx.send(AppEvent::K8sError(format!(
+                                            "Connect to {}: {}",
+                                            result.context, e
+                                        )));
+                                    }
+                                }
+                            });
+                        }
+                    }
                     InputAction::None => {}
                 }
             }
@@ -431,6 +563,30 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
             AppEvent::K8sError(msg) => {
                 app.set_error(msg);
                 app.loading = false;
+            }
+            AppEvent::SearchResultsBatch {
+                context,
+                resource_type,
+                items,
+            } => {
+                if app.view_mode == types::ViewMode::Search {
+                    for item in items {
+                        app.search_results.push(types::SearchResult {
+                            resource: item,
+                            context: context.clone(),
+                            resource_type,
+                        });
+                    }
+                    app.update_search_filter();
+                }
+            }
+            AppEvent::SearchScanComplete(_context) => {
+                if app.view_mode == types::ViewMode::Search {
+                    app.search_contexts_done += 1;
+                    if app.search_contexts_done >= app.search_contexts_total {
+                        app.search_loading = false;
+                    }
+                }
             }
         }
 

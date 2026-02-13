@@ -111,6 +111,29 @@ async fn watch_statefulsets(
     Ok(())
 }
 
+pub async fn list_all_resources(
+    client: Client,
+    resource_type: ResourceType,
+) -> Result<Vec<ResourceItem>> {
+    match resource_type {
+        ResourceType::Pods => {
+            let api: Api<Pod> = Api::all(client);
+            let list = api.list(&ListParams::default()).await?;
+            Ok(list.items.iter().map(pod_to_resource_item).collect())
+        }
+        ResourceType::PersistentVolumeClaims => {
+            let api: Api<PersistentVolumeClaim> = Api::all(client);
+            let list = api.list(&ListParams::default()).await?;
+            Ok(list.items.iter().map(pvc_to_resource_item).collect())
+        }
+        ResourceType::StatefulSets => {
+            let api: Api<StatefulSet> = Api::all(client);
+            let list = api.list(&ListParams::default()).await?;
+            Ok(list.items.iter().map(statefulset_to_resource_item).collect())
+        }
+    }
+}
+
 pub async fn describe_resource(
     client: Client,
     namespace: &str,

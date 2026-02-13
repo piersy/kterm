@@ -13,12 +13,19 @@ pub fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
             if app.filter_active {
                 "Esc:Cancel  Enter:Apply  Type to filter..."
             } else {
-                "q:Quit  Tab:Selector  j/k:Nav  Enter:Detail  l:Logs  d:Delete  r:Restart  e:Edit  /:Filter"
+                "q:Quit  Tab:Selector  j/k:Nav  Enter:Detail  l:Logs  d:Delete  r:Restart  e:Edit  /:Filter  Ctrl+F:Search"
             }
         }
+        ViewMode::Detail if app.entered_from_search => {
+            "Esc:Back to search  j/k:Scroll  l:Logs  g/G:Top/Bottom"
+        }
         ViewMode::Detail => "Esc:Back  j/k:Scroll  e:Edit  l:Logs  d:Delete  r:Restart  g/G:Top/Bottom",
+        ViewMode::Logs if app.entered_from_search => {
+            "Esc:Back to search  f:Follow  j/k:Scroll  g/G:Top/Bottom"
+        }
         ViewMode::Logs => "Esc:Back  f:Follow  j/k:Scroll  g/G:Top/Bottom",
         ViewMode::Confirm(_) => "y:Confirm  Any other key:Cancel",
+        ViewMode::Search => "Esc:Back  Down/Up:Nav  Enter:Detail  Type to search...",
     };
 
     let mut spans = vec![Span::styled(
