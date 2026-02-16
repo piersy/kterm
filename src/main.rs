@@ -7,6 +7,8 @@ mod types;
 mod ui;
 #[cfg(test)]
 mod ui_test;
+#[cfg(test)]
+mod subprocess_test;
 
 use std::io;
 
