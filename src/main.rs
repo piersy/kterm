@@ -78,7 +78,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                 }
 
                 // Start watching resources
-                let ns = "default".to_string();
+                let ns = current_namespace.clone();
                 let watch_tx = k8s_tx.clone();
                 let watch_client = manager.client.clone();
                 tokio::spawn(async move {
