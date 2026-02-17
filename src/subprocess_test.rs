@@ -176,6 +176,7 @@ mod tests {
     #[test]
     fn test_edit_yaml_action() {
         let mut app = App::new();
+        app.focus = crate::types::Focus::ResourceList;
         app.resources = vec![fake_pod("pod-0")];
         app.resource_type = ResourceType::Pods;
         let action = app.handle_input(key(KeyCode::Char('e')));

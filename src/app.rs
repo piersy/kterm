@@ -63,13 +63,13 @@ impl App {
         let mut table_state = TableState::default();
         table_state.select(Some(0));
 
-        Self {
+        let mut app = Self {
             contexts: vec!["default-context".to_string()],
             selected_context: 0,
             namespaces: vec!["default".to_string()],
             selected_namespace: 0,
             resource_type: ResourceType::Pods,
-            focus: Focus::ResourceList,
+            focus: Focus::ContextSelector,
 
             resources: Vec::new(),
             table_state,
@@ -104,7 +104,9 @@ impl App {
             entered_from_search: false,
 
             should_quit: false,
-        }
+        };
+        app.dropdown_open();
+        app
     }
 
     pub fn current_context(&self) -> &str {

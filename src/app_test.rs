@@ -39,6 +39,7 @@ mod tests {
 
     fn app_with_pods() -> App {
         let mut app = App::new();
+        app.focus = Focus::ResourceList;
         app.resources = vec![
             fake_pod("pod-0", "Running"),
             fake_pod("pod-1", "Pending"),
@@ -104,10 +105,6 @@ mod tests {
     #[test]
     fn test_tab_cycles_focus() {
         let mut app = App::new();
-        assert_eq!(app.focus, Focus::ResourceList);
-
-        // Tab from ResourceList enters ContextSelector and opens dropdown
-        app.handle_input(key(KeyCode::Tab));
         assert_eq!(app.focus, Focus::ContextSelector);
 
         // Tab from ContextSelector confirms (no change) and moves to NamespaceSelector
@@ -121,11 +118,19 @@ mod tests {
         // Tab from ResourceTypeSelector confirms and moves to ResourceList
         app.handle_input(key(KeyCode::Tab));
         assert_eq!(app.focus, Focus::ResourceList);
+
+        // Tab from ResourceList enters ContextSelector and opens dropdown
+        app.handle_input(key(KeyCode::Tab));
+        assert_eq!(app.focus, Focus::ContextSelector);
     }
 
     #[test]
     fn test_backtab_reverse_cycles_focus() {
         let mut app = App::new();
+        assert_eq!(app.focus, Focus::ContextSelector);
+
+        // BackTab from ContextSelector goes to ResourceList
+        app.handle_input(key(KeyCode::BackTab));
         assert_eq!(app.focus, Focus::ResourceList);
 
         app.handle_input(key(KeyCode::BackTab));
@@ -587,6 +592,7 @@ mod tests {
     #[test]
     fn test_navigate_empty_list() {
         let mut app = App::new();
+        app.focus = Focus::ResourceList;
         // Should not panic on empty list
         app.handle_input(key(KeyCode::Char('j')));
         app.handle_input(key(KeyCode::Char('k')));

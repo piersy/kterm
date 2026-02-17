@@ -572,6 +572,9 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                 app.namespaces = namespaces;
                 app.selected_namespace = 0;
                 app.loading = false;
+                if app.focus == types::Focus::NamespaceSelector {
+                    app.update_dropdown_filter();
+                }
             }
             AppEvent::DetailLoaded(text) => {
                 app.detail_text = text;
@@ -588,6 +591,9 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                 app.contexts = contexts;
                 if let Some(idx) = app.contexts.iter().position(|c| c == &current) {
                     app.selected_context = idx;
+                }
+                if app.focus == types::Focus::ContextSelector {
+                    app.update_dropdown_filter();
                 }
             }
             AppEvent::K8sError(msg) => {

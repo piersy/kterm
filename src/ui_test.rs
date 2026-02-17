@@ -33,6 +33,7 @@ mod tests {
 
     fn app_with_pods() -> App {
         let mut app = App::new();
+        app.focus = Focus::ResourceList;
         app.contexts = vec!["gke-prod".to_string(), "minikube".to_string()];
         app.selected_context = 0;
         app.namespaces = vec!["default".to_string(), "kube-system".to_string()];
