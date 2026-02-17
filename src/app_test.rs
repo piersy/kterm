@@ -106,15 +106,19 @@ mod tests {
         let mut app = App::new();
         assert_eq!(app.focus, Focus::ResourceList);
 
+        // Tab from ResourceList enters ContextSelector and opens dropdown
         app.handle_input(key(KeyCode::Tab));
         assert_eq!(app.focus, Focus::ContextSelector);
 
+        // Tab from ContextSelector confirms (no change) and moves to NamespaceSelector
         app.handle_input(key(KeyCode::Tab));
         assert_eq!(app.focus, Focus::NamespaceSelector);
 
+        // Tab from NamespaceSelector confirms and moves to ResourceTypeSelector
         app.handle_input(key(KeyCode::Tab));
         assert_eq!(app.focus, Focus::ResourceTypeSelector);
 
+        // Tab from ResourceTypeSelector confirms and moves to ResourceList
         app.handle_input(key(KeyCode::Tab));
         assert_eq!(app.focus, Focus::ResourceList);
     }
@@ -132,7 +136,7 @@ mod tests {
     }
 
     #[test]
-    fn test_context_selector_h_l() {
+    fn test_context_selector_dropdown() {
         let mut app = App::new();
         app.contexts = vec![
             "ctx-1".to_string(),
@@ -141,28 +145,52 @@ mod tests {
         ];
         app.selected_context = 0;
         app.focus = Focus::ContextSelector;
+        app.dropdown_open();
 
-        let action = app.handle_input(key(KeyCode::Char('l')));
+        // All 3 items should be in dropdown
+        assert_eq!(app.dropdown_filtered.len(), 3);
+        assert_eq!(app.dropdown_selected, 0);
+
+        // Arrow down to select ctx-2
+        app.handle_input(key(KeyCode::Down));
+        assert_eq!(app.dropdown_selected, 1);
+
+        // Enter to confirm ctx-2
+        let action = app.handle_input(key(KeyCode::Enter));
         assert_eq!(action, InputAction::ContextChanged);
         assert_eq!(app.selected_context, 1);
+        // Focus should advance to NamespaceSelector
+        assert_eq!(app.focus, Focus::NamespaceSelector);
+    }
 
-        let action = app.handle_input(key(KeyCode::Char('l')));
-        assert_eq!(action, InputAction::ContextChanged);
-        assert_eq!(app.selected_context, 2);
+    #[test]
+    fn test_context_selector_fuzzy_filter() {
+        let mut app = App::new();
+        app.contexts = vec![
+            "gke-prod".to_string(),
+            "gke-staging".to_string(),
+            "minikube".to_string(),
+        ];
+        app.selected_context = 0;
+        app.focus = Focus::ContextSelector;
+        app.dropdown_open();
 
-        // Wrap
-        let action = app.handle_input(key(KeyCode::Char('l')));
-        assert_eq!(action, InputAction::ContextChanged);
-        assert_eq!(app.selected_context, 0);
+        // Type "mini" to filter
+        app.handle_input(key(KeyCode::Char('m')));
+        app.handle_input(key(KeyCode::Char('i')));
+        app.handle_input(key(KeyCode::Char('n')));
+        app.handle_input(key(KeyCode::Char('i')));
+        assert_eq!(app.dropdown_filtered.len(), 1);
+        assert_eq!(app.dropdown_query, "mini");
 
-        // Go back with h
-        let action = app.handle_input(key(KeyCode::Char('h')));
+        // Enter to select minikube (index 2 in original list)
+        let action = app.handle_input(key(KeyCode::Enter));
         assert_eq!(action, InputAction::ContextChanged);
         assert_eq!(app.selected_context, 2);
     }
 
     #[test]
-    fn test_namespace_selector() {
+    fn test_namespace_selector_dropdown() {
         let mut app = App::new();
         app.namespaces = vec![
             "default".to_string(),
@@ -170,33 +198,98 @@ mod tests {
         ];
         app.selected_namespace = 0;
         app.focus = Focus::NamespaceSelector;
+        app.dropdown_open();
 
-        let action = app.handle_input(key(KeyCode::Right));
+        // Navigate to kube-system and select
+        app.handle_input(key(KeyCode::Down));
+        let action = app.handle_input(key(KeyCode::Enter));
         assert_eq!(action, InputAction::NamespaceChanged);
         assert_eq!(app.selected_namespace, 1);
-
-        let action = app.handle_input(key(KeyCode::Right));
-        assert_eq!(action, InputAction::NamespaceChanged);
-        assert_eq!(app.selected_namespace, 0);
+        assert_eq!(app.focus, Focus::ResourceTypeSelector);
     }
 
     #[test]
-    fn test_resource_type_selector() {
+    fn test_resource_type_selector_dropdown() {
         let mut app = App::new();
         app.focus = Focus::ResourceTypeSelector;
+        app.dropdown_open();
         assert_eq!(app.resource_type, ResourceType::Pods);
 
-        let action = app.handle_input(key(KeyCode::Char('l')));
+        // Navigate down to PVCs (index 1) and select
+        app.handle_input(key(KeyCode::Down));
+        let action = app.handle_input(key(KeyCode::Enter));
         assert_eq!(action, InputAction::ResourceTypeChanged);
         assert_eq!(app.resource_type, ResourceType::PersistentVolumeClaims);
+        // Focus should advance to ResourceList
+        assert_eq!(app.focus, Focus::ResourceList);
+    }
 
-        let action = app.handle_input(key(KeyCode::Char('l')));
-        assert_eq!(action, InputAction::ResourceTypeChanged);
-        assert_eq!(app.resource_type, ResourceType::StatefulSets);
+    #[test]
+    fn test_selector_esc_returns_to_resource_list() {
+        let mut app = App::new();
+        app.focus = Focus::ContextSelector;
+        app.dropdown_open();
 
-        let action = app.handle_input(key(KeyCode::Char('h')));
-        assert_eq!(action, InputAction::ResourceTypeChanged);
-        assert_eq!(app.resource_type, ResourceType::PersistentVolumeClaims);
+        app.handle_input(key(KeyCode::Esc));
+        assert_eq!(app.focus, Focus::ResourceList);
+    }
+
+    #[test]
+    fn test_selector_typing_then_backspace() {
+        let mut app = App::new();
+        app.contexts = vec![
+            "gke-prod".to_string(),
+            "gke-staging".to_string(),
+            "minikube".to_string(),
+        ];
+        app.focus = Focus::ContextSelector;
+        app.dropdown_open();
+
+        app.handle_input(key(KeyCode::Char('g')));
+        app.handle_input(key(KeyCode::Char('k')));
+        assert_eq!(app.dropdown_query, "gk");
+        assert_eq!(app.dropdown_filtered.len(), 2); // gke-prod and gke-staging
+
+        app.handle_input(key(KeyCode::Backspace));
+        assert_eq!(app.dropdown_query, "g");
+        assert_eq!(app.dropdown_filtered.len(), 2); // still gke-prod and gke-staging
+
+        app.handle_input(key(KeyCode::Backspace));
+        assert_eq!(app.dropdown_query, "");
+        assert_eq!(app.dropdown_filtered.len(), 3); // all items shown again
+    }
+
+    #[test]
+    fn test_selector_no_change_returns_none() {
+        let mut app = App::new();
+        app.contexts = vec!["ctx-1".to_string()];
+        app.selected_context = 0;
+        app.focus = Focus::ContextSelector;
+        app.dropdown_open();
+
+        // Selecting the already-selected context returns None
+        let action = app.handle_input(key(KeyCode::Enter));
+        assert_eq!(action, InputAction::None);
+        assert_eq!(app.focus, Focus::NamespaceSelector);
+    }
+
+    #[test]
+    fn test_dropdown_navigate_wraps() {
+        let mut app = App::new();
+        app.contexts = vec![
+            "ctx-1".to_string(),
+            "ctx-2".to_string(),
+        ];
+        app.focus = Focus::ContextSelector;
+        app.dropdown_open();
+
+        // Up from 0 wraps to last
+        app.handle_input(key(KeyCode::Up));
+        assert_eq!(app.dropdown_selected, 1);
+
+        // Down from last wraps to 0
+        app.handle_input(key(KeyCode::Down));
+        assert_eq!(app.dropdown_selected, 0);
     }
 
     #[test]
@@ -404,13 +497,11 @@ mod tests {
     }
 
     #[test]
-    fn test_resource_type_cycling() {
-        assert_eq!(ResourceType::Pods.next(), ResourceType::PersistentVolumeClaims);
-        assert_eq!(ResourceType::PersistentVolumeClaims.next(), ResourceType::StatefulSets);
-        assert_eq!(ResourceType::StatefulSets.next(), ResourceType::Pods);
-
-        assert_eq!(ResourceType::Pods.prev(), ResourceType::StatefulSets);
-        assert_eq!(ResourceType::StatefulSets.prev(), ResourceType::PersistentVolumeClaims);
+    fn test_resource_type_all_variants() {
+        assert_eq!(ResourceType::ALL.len(), 3);
+        assert_eq!(ResourceType::ALL[0], ResourceType::Pods);
+        assert_eq!(ResourceType::ALL[1], ResourceType::PersistentVolumeClaims);
+        assert_eq!(ResourceType::ALL[2], ResourceType::StatefulSets);
     }
 
     #[test]

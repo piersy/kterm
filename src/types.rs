@@ -14,22 +14,6 @@ impl ResourceType {
         ResourceType::StatefulSets,
     ];
 
-    pub fn next(self) -> Self {
-        match self {
-            ResourceType::Pods => ResourceType::PersistentVolumeClaims,
-            ResourceType::PersistentVolumeClaims => ResourceType::StatefulSets,
-            ResourceType::StatefulSets => ResourceType::Pods,
-        }
-    }
-
-    pub fn prev(self) -> Self {
-        match self {
-            ResourceType::Pods => ResourceType::StatefulSets,
-            ResourceType::PersistentVolumeClaims => ResourceType::Pods,
-            ResourceType::StatefulSets => ResourceType::PersistentVolumeClaims,
-        }
-    }
-
     pub fn column_headers(&self) -> Vec<&'static str> {
         match self {
             ResourceType::Pods => vec!["NAME", "STATUS", "AGE", "RESTARTS", "NODE"],

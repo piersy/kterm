@@ -5,13 +5,20 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
 
 use crate::app::App;
-use crate::types::{ConfirmAction, ViewMode};
+use crate::types::{ConfirmAction, Focus, ViewMode};
 
 pub fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
     let bindings = match app.view_mode {
         ViewMode::List => {
             if app.filter_active {
                 "Esc:Cancel  Enter:Apply  Type to filter..."
+            } else if matches!(
+                app.focus,
+                Focus::ContextSelector
+                    | Focus::NamespaceSelector
+                    | Focus::ResourceTypeSelector
+            ) {
+                "Esc:Back  Tab/Enter:Select  Up/Down:Nav  Type to filter..."
             } else {
                 "q:Quit  Tab:Selector  j/k:Nav  Enter:Detail  l:Logs  d:Delete  r:Restart  e:Edit  /:Filter  Ctrl+F:Search"
             }

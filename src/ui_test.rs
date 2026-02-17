@@ -162,14 +162,18 @@ mod tests {
     }
 
     #[test]
-    fn test_list_view_renders_selector_arrows() {
+    fn test_list_view_renders_selector_values() {
         let mut app = app_with_pods();
         let output = render_to_string(&mut app, 100, 24);
 
-        // Selectors use arrow indicators
+        // Selectors show their current values
         assert!(
-            output.contains("◀") && output.contains("▶"),
-            "Selectors should show left/right arrows"
+            output.contains("gke-prod"),
+            "Context selector should show current value"
+        );
+        assert!(
+            output.contains("default"),
+            "Namespace selector should show current value"
         );
     }
 
@@ -462,23 +466,27 @@ mod tests {
     // --- Focus Indicator ---
 
     #[test]
-    fn test_focused_selector_uses_arrows() {
+    fn test_focused_selector_shows_dropdown() {
         let mut app = app_with_pods();
         app.focus = Focus::ContextSelector;
+        app.dropdown_open();
 
-        // Render with context focused
-        let output_ctx = render_to_string(&mut app, 100, 24);
+        // Render with context focused - dropdown should show context values
+        let output_ctx = render_to_string(&mut app, 100, 30);
         assert!(
             output_ctx.contains("gke-prod"),
-            "Context selector should show value when focused"
+            "Dropdown should show context values when focused, got:\n{}",
+            output_ctx
         );
 
         // Switch focus to namespace
         app.focus = Focus::NamespaceSelector;
-        let output_ns = render_to_string(&mut app, 100, 24);
+        app.dropdown_open();
+        let output_ns = render_to_string(&mut app, 100, 30);
         assert!(
             output_ns.contains("default"),
-            "Namespace selector should show value when focused"
+            "Dropdown should show namespace values when focused, got:\n{}",
+            output_ns
         );
     }
 
@@ -569,14 +577,16 @@ mod tests {
     fn test_full_flow_type_switch_rerenders_columns() {
         let mut app = app_with_pods();
         app.focus = Focus::ResourceTypeSelector;
+        app.dropdown_open();
 
         // Start with Pods
-        let pods_output = render_to_string(&mut app, 100, 24);
+        let pods_output = render_to_string(&mut app, 100, 30);
         assert!(pods_output.contains("NODE"));
 
-        // Switch to StatefulSets
-        app.handle_input(key(KeyCode::Char('l'))); // Pods -> PVCs
-        app.handle_input(key(KeyCode::Char('l'))); // PVCs -> StatefulSets
+        // Navigate down twice in dropdown: Pods -> PVCs -> StatefulSets
+        app.handle_input(key(KeyCode::Down)); // PVCs
+        app.handle_input(key(KeyCode::Down)); // StatefulSets
+        app.handle_input(key(KeyCode::Enter)); // Confirm StatefulSets
         app.resources = vec![ResourceItem {
             name: "web".to_string(),
             namespace: "default".to_string(),
@@ -585,7 +595,7 @@ mod tests {
             extra: vec![("ready".to_string(), "2/2".to_string())],
             raw_yaml: String::new(),
         }];
-        let ss_output = render_to_string(&mut app, 100, 24);
+        let ss_output = render_to_string(&mut app, 100, 30);
         assert!(ss_output.contains("READY"));
         assert!(ss_output.contains("StatefulSets"));
         assert!(!ss_output.contains("NODE"));

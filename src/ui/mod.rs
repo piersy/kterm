@@ -45,26 +45,46 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         return;
     }
 
+    let selector_focused = matches!(
+        app.focus,
+        crate::types::Focus::ContextSelector
+            | crate::types::Focus::NamespaceSelector
+            | crate::types::Focus::ResourceTypeSelector
+    );
+
+    let dropdown_height: u16 = if selector_focused {
+        // Show up to 10 items + 2 for border + 1 for search input
+        let item_count = app.dropdown_filtered.len() as u16;
+        (item_count + 3).min(13).max(3)
+    } else {
+        0
+    };
+
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3), // header selectors
-            Constraint::Min(10),  // main content
-            Constraint::Length(1), // footer keybindings
+            Constraint::Length(3),               // header selectors
+            Constraint::Length(dropdown_height),  // dropdown (0 when hidden)
+            Constraint::Min(10),                 // main content
+            Constraint::Length(1),               // footer keybindings
         ])
         .split(frame.area());
 
     header::render(frame, app, chunks[0]);
 
+    if selector_focused {
+        header::render_dropdown(frame, app, chunks[1]);
+    }
+
     match app.view_mode {
         ViewMode::List => {
-            resource_list::render(frame, app, chunks[1]);
+            resource_list::render(frame, app, chunks[2]);
         }
         ViewMode::Detail | ViewMode::Confirm(_) => {
             let split = Layout::default()
                 .direction(Direction::Horizontal)
                 .constraints([Constraint::Percentage(35), Constraint::Percentage(65)])
-                .split(chunks[1]);
+                .split(chunks[2]);
             resource_list::render(frame, app, split[0]);
             detail::render(frame, app, split[1]);
 
@@ -76,12 +96,12 @@ pub fn render(frame: &mut Frame, app: &mut App) {
             let split = Layout::default()
                 .direction(Direction::Horizontal)
                 .constraints([Constraint::Percentage(35), Constraint::Percentage(65)])
-                .split(chunks[1]);
+                .split(chunks[2]);
             resource_list::render(frame, app, split[0]);
             logs::render(frame, app, split[1]);
         }
         ViewMode::Search => unreachable!(), // handled above
     }
 
-    help::render_footer(frame, app, chunks[2]);
+    help::render_footer(frame, app, chunks[3]);
 }
