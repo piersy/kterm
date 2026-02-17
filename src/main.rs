@@ -7,6 +7,8 @@ mod types;
 mod ui;
 #[cfg(test)]
 mod ui_test;
+#[cfg(test)]
+mod subprocess_test;
 
 use std::io;
 
@@ -345,30 +347,30 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                     }
                     InputAction::OpenLogsInEditor => {
                         if !app.log_lines.is_empty() {
-                            // Suspend terminal for editor
+                            events.suspend();
                             disable_raw_mode()?;
                             execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
 
                             let _ = open_logs_in_editor(&app.log_lines);
 
-                            // Resume terminal
                             enable_raw_mode()?;
                             execute!(terminal.backend_mut(), EnterAlternateScreen)?;
                             terminal.clear()?;
+                            events.resume();
                         }
                     }
                     InputAction::OpenLogsInLess => {
                         if !app.log_lines.is_empty() {
-                            // Suspend terminal for less
+                            events.suspend();
                             disable_raw_mode()?;
                             execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
 
                             let _ = open_logs_in_less(&app.log_lines);
 
-                            // Resume terminal
                             enable_raw_mode()?;
                             execute!(terminal.backend_mut(), EnterAlternateScreen)?;
                             terminal.clear()?;
+                            events.resume();
                         }
                     }
                     InputAction::Edit => {
@@ -380,16 +382,16 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                             let mgr = k8s_manager.clone();
                             let action_tx = tx.clone();
 
-                            // Suspend terminal for editor
+                            events.suspend();
                             disable_raw_mode()?;
                             execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
 
                             let edited = edit_yaml_in_editor(&yaml);
 
-                            // Resume terminal
                             enable_raw_mode()?;
                             execute!(terminal.backend_mut(), EnterAlternateScreen)?;
                             terminal.clear()?;
+                            events.resume();
 
                             if let Ok(Some(new_yaml)) = edited {
                                 tokio::spawn(async move {
