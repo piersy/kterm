@@ -15,17 +15,21 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
     ])
     .split(area);
 
+    let show_query_for = |focus: Focus| -> Option<&str> {
+        if app.focus == focus && app.dropdown_visible {
+            Some(&app.dropdown_query)
+        } else {
+            None
+        }
+    };
+
     render_selector(
         frame,
         "Context",
         &app.contexts,
         app.selected_context,
         app.focus == Focus::ContextSelector,
-        if app.focus == Focus::ContextSelector {
-            Some(&app.dropdown_query)
-        } else {
-            None
-        },
+        show_query_for(Focus::ContextSelector),
         chunks[0],
     );
 
@@ -35,11 +39,7 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
         &app.namespaces,
         app.selected_namespace,
         app.focus == Focus::NamespaceSelector,
-        if app.focus == Focus::NamespaceSelector {
-            Some(&app.dropdown_query)
-        } else {
-            None
-        },
+        show_query_for(Focus::NamespaceSelector),
         chunks[1],
     );
 
@@ -58,11 +58,7 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
         &type_names,
         type_idx,
         app.focus == Focus::ResourceTypeSelector,
-        if app.focus == Focus::ResourceTypeSelector {
-            Some(&app.dropdown_query)
-        } else {
-            None
-        },
+        show_query_for(Focus::ResourceTypeSelector),
         chunks[2],
     );
 }
@@ -88,20 +84,25 @@ fn render_selector(
         .border_style(border_style);
 
     if let Some(q) = query {
-        // Focused: show search input with cursor
+        // Dropdown visible: show search input with cursor
         let display = format!("{}\u{2588}", q);
         let paragraph = Paragraph::new(display)
             .block(block)
             .style(Style::default().fg(Color::White));
         frame.render_widget(paragraph, area);
     } else {
-        // Unfocused: show current value
+        // Show current value (highlighted when focused)
         let value = items.get(selected).map(|s| s.as_str()).unwrap_or("—");
 
-        let line = Line::from(vec![Span::styled(
-            value,
-            Style::default().fg(Color::DarkGray),
-        )]);
+        let text_style = if focused {
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        };
+
+        let line = Line::from(vec![Span::styled(value, text_style)]);
 
         let paragraph = Paragraph::new(line).block(block).centered();
         frame.render_widget(paragraph, area);

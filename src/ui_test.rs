@@ -467,27 +467,38 @@ mod tests {
     // --- Focus Indicator ---
 
     #[test]
-    fn test_focused_selector_shows_dropdown() {
+    fn test_focused_selector_shows_value_when_dropdown_hidden() {
         let mut app = app_with_pods();
         app.focus = Focus::ContextSelector;
         app.dropdown_open();
 
-        // Render with context focused - dropdown should show context values
+        // Dropdown hidden: selector should show the current value
+        let output = render_to_string(&mut app, 100, 30);
+        assert!(
+            output.contains("gke-prod"),
+            "Selector should show current value when focused but dropdown hidden, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_focused_selector_shows_dropdown_when_visible() {
+        let mut app = app_with_pods();
+        app.focus = Focus::ContextSelector;
+        app.dropdown_open();
+        app.dropdown_visible = true;
+
+        // Dropdown visible: should show context values in the dropdown list
         let output_ctx = render_to_string(&mut app, 100, 30);
         assert!(
             output_ctx.contains("gke-prod"),
-            "Dropdown should show context values when focused, got:\n{}",
+            "Dropdown should show context values when visible, got:\n{}",
             output_ctx
         );
-
-        // Switch focus to namespace
-        app.focus = Focus::NamespaceSelector;
-        app.dropdown_open();
-        let output_ns = render_to_string(&mut app, 100, 30);
         assert!(
-            output_ns.contains("default"),
-            "Dropdown should show namespace values when focused, got:\n{}",
-            output_ns
+            output_ctx.contains("minikube"),
+            "Dropdown should show all context values, got:\n{}",
+            output_ctx
         );
     }
 

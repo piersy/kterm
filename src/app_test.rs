@@ -152,19 +152,20 @@ mod tests {
         app.focus = Focus::ContextSelector;
         app.dropdown_open();
 
-        // All 3 items should be in dropdown
+        // All 3 items should be in filtered list
         assert_eq!(app.dropdown_filtered.len(), 3);
         assert_eq!(app.dropdown_selected, 0);
+        assert!(!app.dropdown_visible); // not visible until user interacts
 
-        // Arrow down to select ctx-2
+        // Arrow down opens dropdown and selects ctx-2
         app.handle_input(key(KeyCode::Down));
+        assert!(app.dropdown_visible);
         assert_eq!(app.dropdown_selected, 1);
 
         // Enter to confirm ctx-2
         let action = app.handle_input(key(KeyCode::Enter));
         assert_eq!(action, InputAction::ContextChanged);
         assert_eq!(app.selected_context, 1);
-        // Focus should advance to NamespaceSelector
         assert_eq!(app.focus, Focus::NamespaceSelector);
     }
 
@@ -180,8 +181,9 @@ mod tests {
         app.focus = Focus::ContextSelector;
         app.dropdown_open();
 
-        // Type "mini" to filter
+        // Type "mini" to filter (typing opens dropdown)
         app.handle_input(key(KeyCode::Char('m')));
+        assert!(app.dropdown_visible);
         app.handle_input(key(KeyCode::Char('i')));
         app.handle_input(key(KeyCode::Char('n')));
         app.handle_input(key(KeyCode::Char('i')));
@@ -205,7 +207,7 @@ mod tests {
         app.focus = Focus::NamespaceSelector;
         app.dropdown_open();
 
-        // Navigate to kube-system and select
+        // Navigate to kube-system (Down opens dropdown) and select
         app.handle_input(key(KeyCode::Down));
         let action = app.handle_input(key(KeyCode::Enter));
         assert_eq!(action, InputAction::NamespaceChanged);
@@ -220,23 +222,61 @@ mod tests {
         app.dropdown_open();
         assert_eq!(app.resource_type, ResourceType::Pods);
 
-        // Navigate down to PVCs (index 1) and select
+        // Navigate down to PVCs (Down opens dropdown) and select
         app.handle_input(key(KeyCode::Down));
         let action = app.handle_input(key(KeyCode::Enter));
         assert_eq!(action, InputAction::ResourceTypeChanged);
         assert_eq!(app.resource_type, ResourceType::PersistentVolumeClaims);
-        // Focus should advance to ResourceList
         assert_eq!(app.focus, Focus::ResourceList);
     }
 
     #[test]
-    fn test_selector_esc_returns_to_resource_list() {
+    fn test_selector_esc_closes_dropdown_first() {
         let mut app = App::new();
+        app.contexts = vec!["ctx-1".to_string(), "ctx-2".to_string()];
         app.focus = Focus::ContextSelector;
         app.dropdown_open();
 
+        // Type to open dropdown
+        app.handle_input(key(KeyCode::Char('c')));
+        assert!(app.dropdown_visible);
+
+        // First Esc closes the dropdown but stays on selector
+        app.handle_input(key(KeyCode::Esc));
+        assert!(!app.dropdown_visible);
+        assert_eq!(app.focus, Focus::ContextSelector);
+
+        // Second Esc leaves selector to resource list
         app.handle_input(key(KeyCode::Esc));
         assert_eq!(app.focus, Focus::ResourceList);
+    }
+
+    #[test]
+    fn test_selector_typing_opens_dropdown() {
+        let mut app = App::new();
+        app.contexts = vec!["ctx-1".to_string(), "ctx-2".to_string()];
+        app.focus = Focus::ContextSelector;
+        app.dropdown_open();
+        assert!(!app.dropdown_visible);
+
+        // Typing a character opens the dropdown
+        app.handle_input(key(KeyCode::Char('c')));
+        assert!(app.dropdown_visible);
+        assert_eq!(app.dropdown_query, "c");
+    }
+
+    #[test]
+    fn test_selector_arrows_open_dropdown() {
+        let mut app = App::new();
+        app.contexts = vec!["ctx-1".to_string(), "ctx-2".to_string()];
+        app.focus = Focus::ContextSelector;
+        app.dropdown_open();
+        assert!(!app.dropdown_visible);
+
+        // Down arrow opens the dropdown
+        app.handle_input(key(KeyCode::Down));
+        assert!(app.dropdown_visible);
+        assert_eq!(app.dropdown_selected, 1);
     }
 
     #[test]
@@ -265,16 +305,57 @@ mod tests {
     }
 
     #[test]
-    fn test_selector_no_change_returns_none() {
+    fn test_tab_moves_focus_without_changing_selection() {
         let mut app = App::new();
-        app.contexts = vec!["ctx-1".to_string()];
+        app.contexts = vec!["ctx-1".to_string(), "ctx-2".to_string()];
         app.selected_context = 0;
         app.focus = Focus::ContextSelector;
         app.dropdown_open();
 
-        // Selecting the already-selected context returns None
+        // Open dropdown and navigate to ctx-2
+        app.handle_input(key(KeyCode::Down));
+        assert!(app.dropdown_visible);
+        assert_eq!(app.dropdown_selected, 1);
+
+        // Tab should move focus WITHOUT confirming ctx-2
+        let action = app.handle_input(key(KeyCode::Tab));
+        assert_eq!(action, InputAction::None);
+        assert_eq!(app.selected_context, 0); // unchanged!
+        assert_eq!(app.focus, Focus::NamespaceSelector);
+    }
+
+    #[test]
+    fn test_enter_confirms_dropdown_selection() {
+        let mut app = App::new();
+        app.contexts = vec!["ctx-1".to_string(), "ctx-2".to_string()];
+        app.selected_context = 0;
+        app.focus = Focus::ContextSelector;
+        app.dropdown_open();
+
+        // Open dropdown and navigate to ctx-2
+        app.handle_input(key(KeyCode::Down));
+        assert!(app.dropdown_visible);
+
+        // Enter confirms the selection
+        let action = app.handle_input(key(KeyCode::Enter));
+        assert_eq!(action, InputAction::ContextChanged);
+        assert_eq!(app.selected_context, 1);
+        assert_eq!(app.focus, Focus::NamespaceSelector);
+    }
+
+    #[test]
+    fn test_enter_without_dropdown_advances_focus() {
+        let mut app = App::new();
+        app.contexts = vec!["ctx-1".to_string(), "ctx-2".to_string()];
+        app.selected_context = 0;
+        app.focus = Focus::ContextSelector;
+        app.dropdown_open();
+        assert!(!app.dropdown_visible);
+
+        // Enter without dropdown visible just advances focus (no change)
         let action = app.handle_input(key(KeyCode::Enter));
         assert_eq!(action, InputAction::None);
+        assert_eq!(app.selected_context, 0); // unchanged
         assert_eq!(app.focus, Focus::NamespaceSelector);
     }
 
@@ -288,13 +369,17 @@ mod tests {
         app.focus = Focus::ContextSelector;
         app.dropdown_open();
 
-        // Up from 0 wraps to last
-        app.handle_input(key(KeyCode::Up));
+        // Down opens and moves to index 1
+        app.handle_input(key(KeyCode::Down));
         assert_eq!(app.dropdown_selected, 1);
 
-        // Down from last wraps to 0
+        // Down wraps to 0
         app.handle_input(key(KeyCode::Down));
         assert_eq!(app.dropdown_selected, 0);
+
+        // Up wraps to last
+        app.handle_input(key(KeyCode::Up));
+        assert_eq!(app.dropdown_selected, 1);
     }
 
     #[test]

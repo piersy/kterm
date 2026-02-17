@@ -11,6 +11,7 @@ pub struct App {
     pub selected_context: usize,
     pub namespaces: Vec<String>,
     pub selected_namespace: usize,
+    pub preferred_namespace: Option<String>, // from kubeconfig, used to pre-select on load
     pub resource_type: ResourceType,
     pub focus: Focus,
 
@@ -43,6 +44,7 @@ pub struct App {
     pub dropdown_query: String,
     pub dropdown_filtered: Vec<usize>, // indices into the items list for the focused selector
     pub dropdown_selected: usize,      // index into dropdown_filtered
+    pub dropdown_visible: bool,        // whether the dropdown list is shown
 
     // Search
     pub search_query: String,
@@ -68,6 +70,7 @@ impl App {
             selected_context: 0,
             namespaces: vec!["default".to_string()],
             selected_namespace: 0,
+            preferred_namespace: None,
             resource_type: ResourceType::Pods,
             focus: Focus::ContextSelector,
 
@@ -93,6 +96,7 @@ impl App {
             dropdown_query: String::new(),
             dropdown_filtered: Vec::new(),
             dropdown_selected: 0,
+            dropdown_visible: false,
 
             search_query: String::new(),
             search_results: Vec::new(),
@@ -185,9 +189,10 @@ impl App {
         }
     }
 
-    /// Initialize dropdown state when entering a selector.
+    /// Reset dropdown state when entering a selector (dropdown stays hidden until user acts).
     pub fn dropdown_open(&mut self) {
         self.dropdown_query.clear();
+        self.dropdown_visible = false;
         self.update_dropdown_filter();
     }
 
@@ -215,58 +220,53 @@ impl App {
         }
     }
 
-    /// Confirm the currently selected dropdown item.
-    /// Returns the InputAction if a selection was made (and advances focus).
+    /// Confirm the currently selected dropdown item and advance focus.
     fn dropdown_confirm(&mut self) -> InputAction {
-        if let Some(&item_idx) = self.dropdown_filtered.get(self.dropdown_selected) {
-            let action = match self.focus {
-                Focus::ContextSelector => {
-                    if item_idx != self.selected_context {
-                        self.selected_context = item_idx;
-                        InputAction::ContextChanged
-                    } else {
-                        InputAction::None
+        let action = if self.dropdown_visible {
+            if let Some(&item_idx) = self.dropdown_filtered.get(self.dropdown_selected) {
+                match self.focus {
+                    Focus::ContextSelector => {
+                        if item_idx != self.selected_context {
+                            self.selected_context = item_idx;
+                            InputAction::ContextChanged
+                        } else {
+                            InputAction::None
+                        }
                     }
-                }
-                Focus::NamespaceSelector => {
-                    if item_idx != self.selected_namespace {
-                        self.selected_namespace = item_idx;
-                        InputAction::NamespaceChanged
-                    } else {
-                        InputAction::None
+                    Focus::NamespaceSelector => {
+                        if item_idx != self.selected_namespace {
+                            self.selected_namespace = item_idx;
+                            InputAction::NamespaceChanged
+                        } else {
+                            InputAction::None
+                        }
                     }
-                }
-                Focus::ResourceTypeSelector => {
-                    let new_type = ResourceType::ALL[item_idx];
-                    if new_type != self.resource_type {
-                        self.resource_type = new_type;
-                        InputAction::ResourceTypeChanged
-                    } else {
-                        InputAction::None
+                    Focus::ResourceTypeSelector => {
+                        let new_type = ResourceType::ALL[item_idx];
+                        if new_type != self.resource_type {
+                            self.resource_type = new_type;
+                            InputAction::ResourceTypeChanged
+                        } else {
+                            InputAction::None
+                        }
                     }
+                    Focus::ResourceList => InputAction::None,
                 }
-                Focus::ResourceList => InputAction::None,
-            };
-            // Advance focus to next selector
-            self.focus = self.focus.next();
-            if matches!(
-                self.focus,
-                Focus::ContextSelector | Focus::NamespaceSelector | Focus::ResourceTypeSelector
-            ) {
-                self.dropdown_open();
+            } else {
+                InputAction::None
             }
-            action
         } else {
-            // No selection available, just advance
-            self.focus = self.focus.next();
-            if matches!(
-                self.focus,
-                Focus::ContextSelector | Focus::NamespaceSelector | Focus::ResourceTypeSelector
-            ) {
-                self.dropdown_open();
-            }
             InputAction::None
+        };
+        // Advance focus to next selector
+        self.focus = self.focus.next();
+        if matches!(
+            self.focus,
+            Focus::ContextSelector | Focus::NamespaceSelector | Focus::ResourceTypeSelector
+        ) {
+            self.dropdown_open();
         }
+        action
     }
 
     pub fn handle_tick(&mut self) {
@@ -471,11 +471,36 @@ impl App {
     fn handle_selector_input(&mut self, key: KeyEvent) -> InputAction {
         match key.code {
             KeyCode::Esc => {
-                self.focus = Focus::ResourceList;
+                if self.dropdown_visible {
+                    // Close dropdown, stay on selector
+                    self.dropdown_visible = false;
+                    self.dropdown_query.clear();
+                } else {
+                    // Leave selector, go to resource list
+                    self.focus = Focus::ResourceList;
+                }
                 InputAction::None
             }
-            KeyCode::Enter | KeyCode::Tab => self.dropdown_confirm(),
+            KeyCode::Enter => {
+                // Confirm selection from dropdown and advance focus
+                self.dropdown_confirm()
+            }
+            KeyCode::Tab => {
+                // Move to next focus without changing selection
+                self.dropdown_visible = false;
+                self.focus = self.focus.next();
+                if matches!(
+                    self.focus,
+                    Focus::ContextSelector
+                        | Focus::NamespaceSelector
+                        | Focus::ResourceTypeSelector
+                ) {
+                    self.dropdown_open();
+                }
+                InputAction::None
+            }
             KeyCode::BackTab => {
+                self.dropdown_visible = false;
                 self.focus = self.focus.prev();
                 if matches!(
                     self.focus,
@@ -488,6 +513,10 @@ impl App {
                 InputAction::None
             }
             KeyCode::Down => {
+                if !self.dropdown_visible {
+                    self.dropdown_visible = true;
+                    self.update_dropdown_filter();
+                }
                 if !self.dropdown_filtered.is_empty() {
                     self.dropdown_selected =
                         (self.dropdown_selected + 1) % self.dropdown_filtered.len();
@@ -495,6 +524,10 @@ impl App {
                 InputAction::None
             }
             KeyCode::Up => {
+                if !self.dropdown_visible {
+                    self.dropdown_visible = true;
+                    self.update_dropdown_filter();
+                }
                 if !self.dropdown_filtered.is_empty() {
                     self.dropdown_selected = if self.dropdown_selected == 0 {
                         self.dropdown_filtered.len() - 1
@@ -505,12 +538,17 @@ impl App {
                 InputAction::None
             }
             KeyCode::Backspace => {
-                self.dropdown_query.pop();
-                self.dropdown_selected = 0;
-                self.update_dropdown_filter();
+                if !self.dropdown_query.is_empty() {
+                    self.dropdown_query.pop();
+                    self.dropdown_selected = 0;
+                    self.update_dropdown_filter();
+                }
                 InputAction::None
             }
             KeyCode::Char(c) => {
+                if !self.dropdown_visible {
+                    self.dropdown_visible = true;
+                }
                 self.dropdown_query.push(c);
                 self.dropdown_selected = 0;
                 self.update_dropdown_filter();

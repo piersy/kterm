@@ -42,6 +42,18 @@ impl K8sManager {
             .collect()
     }
 
+    /// Returns the default namespace for the current context from kubeconfig,
+    /// or "default" if not set.
+    pub fn current_namespace(&self) -> String {
+        self.kubeconfig
+            .contexts
+            .iter()
+            .find(|c| c.name == self.current_context)
+            .and_then(|c| c.context.as_ref())
+            .and_then(|ctx| ctx.namespace.clone())
+            .unwrap_or_else(|| "default".to_string())
+    }
+
     pub async fn switch_context(&mut self, context_name: &str) -> Result<()> {
         let config = Config::from_kubeconfig(&KubeConfigOptions {
             context: Some(context_name.to_string()),

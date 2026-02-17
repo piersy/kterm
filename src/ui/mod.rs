@@ -45,17 +45,10 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         return;
     }
 
-    let selector_focused = matches!(
-        app.focus,
-        crate::types::Focus::ContextSelector
-            | crate::types::Focus::NamespaceSelector
-            | crate::types::Focus::ResourceTypeSelector
-    );
-
-    let dropdown_height: u16 = if selector_focused {
-        // Show up to 10 items + 2 for border + 1 for search input
+    let dropdown_height: u16 = if app.dropdown_visible {
+        // Show up to 10 items + 2 for border
         let item_count = app.dropdown_filtered.len() as u16;
-        (item_count + 3).min(13).max(3)
+        (item_count + 2).min(12).max(3)
     } else {
         0
     };
@@ -72,7 +65,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
 
     header::render(frame, app, chunks[0]);
 
-    if selector_focused {
+    if app.dropdown_visible {
         header::render_dropdown(frame, app, chunks[1]);
     }
 
