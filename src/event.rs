@@ -17,6 +17,7 @@ pub enum AppEvent {
     ContextsLoaded {
         contexts: Vec<String>,
         current: String,
+        current_namespace: String,
     },
     K8sError(String),
     SearchResultsBatch {

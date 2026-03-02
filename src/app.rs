@@ -11,6 +11,7 @@ pub struct App {
     pub selected_context: usize,
     pub namespaces: Vec<String>,
     pub selected_namespace: usize,
+    pub preferred_namespace: Option<String>, // from kubeconfig, used to pre-select on load
     pub resource_type: ResourceType,
     pub focus: Focus,
 
@@ -39,6 +40,12 @@ pub struct App {
     pub error_message: Option<String>,
     pub error_ticks: u8,
 
+    // Dropdown selector
+    pub dropdown_query: String,
+    pub dropdown_filtered: Vec<usize>, // indices into the items list for the focused selector
+    pub dropdown_selected: usize,      // index into dropdown_filtered
+    pub dropdown_visible: bool,        // whether the dropdown list is shown
+
     // Search
     pub search_query: String,
     pub search_results: Vec<SearchResult>,
@@ -58,13 +65,14 @@ impl App {
         let mut table_state = TableState::default();
         table_state.select(Some(0));
 
-        Self {
+        let mut app = Self {
             contexts: vec!["default-context".to_string()],
             selected_context: 0,
             namespaces: vec!["default".to_string()],
             selected_namespace: 0,
+            preferred_namespace: None,
             resource_type: ResourceType::Pods,
-            focus: Focus::ResourceList,
+            focus: Focus::ContextSelector,
 
             resources: Vec::new(),
             table_state,
@@ -85,6 +93,11 @@ impl App {
             error_message: None,
             error_ticks: 0,
 
+            dropdown_query: String::new(),
+            dropdown_filtered: Vec::new(),
+            dropdown_selected: 0,
+            dropdown_visible: false,
+
             search_query: String::new(),
             search_results: Vec::new(),
             search_filtered: Vec::new(),
@@ -95,7 +108,9 @@ impl App {
             entered_from_search: false,
 
             should_quit: false,
-        }
+        };
+        app.dropdown_open();
+        app
     }
 
     pub fn current_context(&self) -> &str {
@@ -160,6 +175,98 @@ impl App {
         } else {
             self.search_table_state.select(Some(0));
         }
+    }
+
+    /// Returns the list of items for the currently focused selector.
+    pub fn dropdown_items(&self) -> Vec<String> {
+        match self.focus {
+            Focus::ContextSelector => self.contexts.clone(),
+            Focus::NamespaceSelector => self.namespaces.clone(),
+            Focus::ResourceTypeSelector => {
+                ResourceType::ALL.iter().map(|t| t.to_string()).collect()
+            }
+            Focus::ResourceList => Vec::new(),
+        }
+    }
+
+    /// Reset dropdown state when entering a selector (dropdown stays hidden until user acts).
+    pub fn dropdown_open(&mut self) {
+        self.dropdown_query.clear();
+        self.dropdown_visible = false;
+        self.update_dropdown_filter();
+    }
+
+    /// Re-filter the dropdown items using fuzzy match on the query.
+    pub fn update_dropdown_filter(&mut self) {
+        let items = self.dropdown_items();
+        if self.dropdown_query.is_empty() {
+            self.dropdown_filtered = (0..items.len()).collect();
+        } else {
+            let mut scored: Vec<(usize, i64)> = items
+                .iter()
+                .enumerate()
+                .filter_map(|(i, item)| {
+                    fuzzy_match(&self.dropdown_query, item).map(|score| (i, score))
+                })
+                .collect();
+            scored.sort_by(|a, b| b.1.cmp(&a.1));
+            self.dropdown_filtered = scored.into_iter().map(|(i, _)| i).collect();
+        }
+        // Reset selection to top or clamp
+        if self.dropdown_filtered.is_empty() {
+            self.dropdown_selected = 0;
+        } else {
+            self.dropdown_selected = self.dropdown_selected.min(self.dropdown_filtered.len() - 1);
+        }
+    }
+
+    /// Confirm the currently selected dropdown item and advance focus.
+    fn dropdown_confirm(&mut self) -> InputAction {
+        let action = if self.dropdown_visible {
+            if let Some(&item_idx) = self.dropdown_filtered.get(self.dropdown_selected) {
+                match self.focus {
+                    Focus::ContextSelector => {
+                        if item_idx != self.selected_context {
+                            self.selected_context = item_idx;
+                            InputAction::ContextChanged
+                        } else {
+                            InputAction::None
+                        }
+                    }
+                    Focus::NamespaceSelector => {
+                        if item_idx != self.selected_namespace {
+                            self.selected_namespace = item_idx;
+                            InputAction::NamespaceChanged
+                        } else {
+                            InputAction::None
+                        }
+                    }
+                    Focus::ResourceTypeSelector => {
+                        let new_type = ResourceType::ALL[item_idx];
+                        if new_type != self.resource_type {
+                            self.resource_type = new_type;
+                            InputAction::ResourceTypeChanged
+                        } else {
+                            InputAction::None
+                        }
+                    }
+                    Focus::ResourceList => InputAction::None,
+                }
+            } else {
+                InputAction::None
+            }
+        } else {
+            InputAction::None
+        };
+        // Advance focus to next selector
+        self.focus = self.focus.next();
+        if matches!(
+            self.focus,
+            Focus::ContextSelector | Focus::NamespaceSelector | Focus::ResourceTypeSelector
+        ) {
+            self.dropdown_open();
+        }
+        action
     }
 
     pub fn handle_tick(&mut self) {
@@ -265,9 +372,9 @@ impl App {
     fn handle_list_input(&mut self, key: KeyEvent) -> InputAction {
         match self.focus {
             Focus::ResourceList => self.handle_resource_list_input(key),
-            Focus::ContextSelector => self.handle_context_selector_input(key),
-            Focus::NamespaceSelector => self.handle_namespace_selector_input(key),
-            Focus::ResourceTypeSelector => self.handle_resource_type_selector_input(key),
+            Focus::ContextSelector
+            | Focus::NamespaceSelector
+            | Focus::ResourceTypeSelector => self.handle_selector_input(key),
         }
     }
 
@@ -287,10 +394,26 @@ impl App {
             }
             KeyCode::Tab => {
                 self.focus = self.focus.next();
+                if matches!(
+                    self.focus,
+                    Focus::ContextSelector
+                        | Focus::NamespaceSelector
+                        | Focus::ResourceTypeSelector
+                ) {
+                    self.dropdown_open();
+                }
                 InputAction::None
             }
             KeyCode::BackTab => {
                 self.focus = self.focus.prev();
+                if matches!(
+                    self.focus,
+                    Focus::ContextSelector
+                        | Focus::NamespaceSelector
+                        | Focus::ResourceTypeSelector
+                ) {
+                    self.dropdown_open();
+                }
                 InputAction::None
             }
             KeyCode::Enter => {
@@ -345,104 +468,91 @@ impl App {
         }
     }
 
-    fn handle_context_selector_input(&mut self, key: KeyEvent) -> InputAction {
+    fn handle_selector_input(&mut self, key: KeyEvent) -> InputAction {
         match key.code {
-            KeyCode::Char('q') => {
-                self.should_quit = true;
+            KeyCode::Esc => {
+                if self.dropdown_visible {
+                    // Close dropdown, stay on selector
+                    self.dropdown_visible = false;
+                    self.dropdown_query.clear();
+                } else {
+                    // Leave selector, go to resource list
+                    self.focus = Focus::ResourceList;
+                }
                 InputAction::None
             }
+            KeyCode::Enter => {
+                // Confirm selection from dropdown and advance focus
+                self.dropdown_confirm()
+            }
             KeyCode::Tab => {
+                // Move to next focus without changing selection
+                self.dropdown_visible = false;
                 self.focus = self.focus.next();
+                if matches!(
+                    self.focus,
+                    Focus::ContextSelector
+                        | Focus::NamespaceSelector
+                        | Focus::ResourceTypeSelector
+                ) {
+                    self.dropdown_open();
+                }
                 InputAction::None
             }
             KeyCode::BackTab => {
+                self.dropdown_visible = false;
                 self.focus = self.focus.prev();
+                if matches!(
+                    self.focus,
+                    Focus::ContextSelector
+                        | Focus::NamespaceSelector
+                        | Focus::ResourceTypeSelector
+                ) {
+                    self.dropdown_open();
+                }
                 InputAction::None
             }
-            KeyCode::Char('l') | KeyCode::Right => {
-                if !self.contexts.is_empty() {
-                    self.selected_context = (self.selected_context + 1) % self.contexts.len();
-                    InputAction::ContextChanged
-                } else {
-                    InputAction::None
+            KeyCode::Down => {
+                if !self.dropdown_visible {
+                    self.dropdown_visible = true;
+                    self.update_dropdown_filter();
                 }
+                if !self.dropdown_filtered.is_empty() {
+                    self.dropdown_selected =
+                        (self.dropdown_selected + 1) % self.dropdown_filtered.len();
+                }
+                InputAction::None
             }
-            KeyCode::Char('h') | KeyCode::Left => {
-                if !self.contexts.is_empty() {
-                    self.selected_context = if self.selected_context == 0 {
-                        self.contexts.len() - 1
+            KeyCode::Up => {
+                if !self.dropdown_visible {
+                    self.dropdown_visible = true;
+                    self.update_dropdown_filter();
+                }
+                if !self.dropdown_filtered.is_empty() {
+                    self.dropdown_selected = if self.dropdown_selected == 0 {
+                        self.dropdown_filtered.len() - 1
                     } else {
-                        self.selected_context - 1
+                        self.dropdown_selected - 1
                     };
-                    InputAction::ContextChanged
-                } else {
-                    InputAction::None
                 }
-            }
-            _ => InputAction::None,
-        }
-    }
-
-    fn handle_namespace_selector_input(&mut self, key: KeyEvent) -> InputAction {
-        match key.code {
-            KeyCode::Char('q') => {
-                self.should_quit = true;
                 InputAction::None
             }
-            KeyCode::Tab => {
-                self.focus = self.focus.next();
-                InputAction::None
-            }
-            KeyCode::BackTab => {
-                self.focus = self.focus.prev();
-                InputAction::None
-            }
-            KeyCode::Char('l') | KeyCode::Right => {
-                if !self.namespaces.is_empty() {
-                    self.selected_namespace =
-                        (self.selected_namespace + 1) % self.namespaces.len();
-                    InputAction::NamespaceChanged
-                } else {
-                    InputAction::None
+            KeyCode::Backspace => {
+                if !self.dropdown_query.is_empty() {
+                    self.dropdown_query.pop();
+                    self.dropdown_selected = 0;
+                    self.update_dropdown_filter();
                 }
+                InputAction::None
             }
-            KeyCode::Char('h') | KeyCode::Left => {
-                if !self.namespaces.is_empty() {
-                    self.selected_namespace = if self.selected_namespace == 0 {
-                        self.namespaces.len() - 1
-                    } else {
-                        self.selected_namespace - 1
-                    };
-                    InputAction::NamespaceChanged
-                } else {
-                    InputAction::None
+            KeyCode::Char(c) => {
+                if !self.dropdown_visible {
+                    self.dropdown_visible = true;
                 }
-            }
-            _ => InputAction::None,
-        }
-    }
-
-    fn handle_resource_type_selector_input(&mut self, key: KeyEvent) -> InputAction {
-        match key.code {
-            KeyCode::Char('q') => {
-                self.should_quit = true;
+                self.dropdown_query.push(c);
+                self.dropdown_selected = 0;
+                self.update_dropdown_filter();
                 InputAction::None
-            }
-            KeyCode::Tab => {
-                self.focus = self.focus.next();
-                InputAction::None
-            }
-            KeyCode::BackTab => {
-                self.focus = self.focus.prev();
-                InputAction::None
-            }
-            KeyCode::Char('l') | KeyCode::Right => {
-                self.resource_type = self.resource_type.next();
-                InputAction::ResourceTypeChanged
-            }
-            KeyCode::Char('h') | KeyCode::Left => {
-                self.resource_type = self.resource_type.prev();
-                InputAction::ResourceTypeChanged
             }
             _ => InputAction::None,
         }

@@ -61,6 +61,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
             Ok(manager) => {
                 let contexts = manager.context_names();
                 let current = manager.current_context.clone();
+                let current_namespace = manager.current_namespace();
 
                 // Load namespaces
                 match manager.list_namespaces().await {
@@ -77,7 +78,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                 }
 
                 // Start watching resources
-                let ns = "default".to_string();
+                let ns = current_namespace.clone();
                 let watch_tx = k8s_tx.clone();
                 let watch_client = manager.client.clone();
                 tokio::spawn(async move {
@@ -93,7 +94,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                     }
                 });
 
-                let _ = k8s_tx.send(AppEvent::ContextsLoaded { contexts, current });
+                let _ = k8s_tx.send(AppEvent::ContextsLoaded { contexts, current, current_namespace });
             }
             Err(e) => {
                 let _ = k8s_tx.send(AppEvent::K8sError(format!(
@@ -570,8 +571,20 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
             }
             AppEvent::NamespacesLoaded(namespaces) => {
                 app.namespaces = namespaces;
-                app.selected_namespace = 0;
+                // Try to select the preferred namespace from kubeconfig
+                if let Some(ref pref) = app.preferred_namespace {
+                    if let Some(idx) = app.namespaces.iter().position(|n| n == pref) {
+                        app.selected_namespace = idx;
+                    } else {
+                        app.selected_namespace = 0;
+                    }
+                } else {
+                    app.selected_namespace = 0;
+                }
                 app.loading = false;
+                if app.focus == types::Focus::NamespaceSelector {
+                    app.update_dropdown_filter();
+                }
             }
             AppEvent::DetailLoaded(text) => {
                 app.detail_text = text;
@@ -584,10 +597,19 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
             AppEvent::LogStreamEnded => {
                 app.loading = false;
             }
-            AppEvent::ContextsLoaded { contexts, current } => {
+            AppEvent::ContextsLoaded { contexts, current, current_namespace } => {
                 app.contexts = contexts;
                 if let Some(idx) = app.contexts.iter().position(|c| c == &current) {
                     app.selected_context = idx;
+                }
+                if app.focus == types::Focus::ContextSelector {
+                    app.update_dropdown_filter();
+                }
+                // Store preferred namespace for when namespaces load
+                app.preferred_namespace = Some(current_namespace.clone());
+                // Pre-select if namespaces already loaded
+                if let Some(idx) = app.namespaces.iter().position(|n| n == &current_namespace) {
+                    app.selected_namespace = idx;
                 }
             }
             AppEvent::K8sError(msg) => {
