@@ -282,6 +282,8 @@ impl App {
             Focus::ContextSelector | Focus::NamespaceSelector | Focus::ResourceTypeSelector
         ) {
             self.dropdown_open();
+        } else {
+            self.dropdown_visible = false;
         }
         action
     }
