@@ -53,9 +53,14 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
     let mut events = EventHandler::new();
     let tx = events.sender();
 
+    // Shared K8s manager (wrapped in Arc<Mutex>)
+    let k8s_manager: std::sync::Arc<tokio::sync::Mutex<Option<k8s::client::K8sManager>>> =
+        std::sync::Arc::new(tokio::sync::Mutex::new(None));
+
     // Try to connect to Kubernetes
     app.loading = true;
     let k8s_tx = tx.clone();
+    let init_mgr = k8s_manager.clone();
     tokio::spawn(async move {
         match k8s::client::K8sManager::new().await {
             Ok(manager) => {
@@ -77,22 +82,8 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                     }
                 }
 
-                // Start watching resources
-                let ns = current_namespace.clone();
-                let watch_tx = k8s_tx.clone();
-                let watch_client = manager.client.clone();
-                tokio::spawn(async move {
-                    if let Err(e) = k8s::resources::watch_resources(
-                        watch_client,
-                        &ns,
-                        crate::types::ResourceType::Pods,
-                        watch_tx.clone(),
-                    )
-                    .await
-                    {
-                        let _ = watch_tx.send(AppEvent::K8sError(format!("Watch error: {}", e)));
-                    }
-                });
+                // Store manager for watcher spawning and actions
+                *init_mgr.lock().await = Some(manager);
 
                 let _ = k8s_tx.send(AppEvent::ContextsLoaded { contexts, current, current_namespace });
             }
@@ -105,20 +96,6 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
             }
         }
     });
-
-    // Shared K8s manager for actions (wrapped in Arc<Mutex>)
-    let k8s_manager: std::sync::Arc<tokio::sync::Mutex<Option<k8s::client::K8sManager>>> =
-        std::sync::Arc::new(tokio::sync::Mutex::new(None));
-
-    // Try to init the manager for actions
-    {
-        let mgr = k8s_manager.clone();
-        tokio::spawn(async move {
-            if let Ok(manager) = k8s::client::K8sManager::new().await {
-                *mgr.lock().await = Some(manager);
-            }
-        });
-    }
 
     // Track the current watcher task so we can abort it
     let mut watcher_handle: Option<tokio::task::JoinHandle<()>> = None;
@@ -155,7 +132,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                         app.loading = true;
                         app.resources.clear();
 
-                        tokio::spawn(async move {
+                        let handle = tokio::spawn(async move {
                             let mut guard = mgr.lock().await;
                             if let Some(ref mut manager) = *guard {
                                 if let Err(e) = manager.switch_context(&context_name).await {
@@ -178,26 +155,25 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                                         )));
                                     }
                                 }
-                                // Restart watcher
+                                // Start watching in same task (handle is tracked)
                                 let client = manager.client.clone();
-                                let watch_tx = action_tx.clone();
-                                tokio::spawn(async move {
-                                    if let Err(e) = k8s::resources::watch_resources(
-                                        client,
-                                        &ns,
-                                        rt,
-                                        watch_tx.clone(),
-                                    )
-                                    .await
-                                    {
-                                        let _ = watch_tx.send(AppEvent::K8sError(format!(
-                                            "Watch error: {}",
-                                            e
-                                        )));
-                                    }
-                                });
+                                drop(guard);
+                                if let Err(e) = k8s::resources::watch_resources(
+                                    client,
+                                    &ns,
+                                    rt,
+                                    action_tx.clone(),
+                                )
+                                .await
+                                {
+                                    let _ = action_tx.send(AppEvent::K8sError(format!(
+                                        "Watch error: {}",
+                                        e
+                                    )));
+                                }
                             }
                         });
+                        watcher_handle = Some(handle);
                     }
                     InputAction::NamespaceChanged | InputAction::ResourceTypeChanged => {
                         // Abort current watcher and start new one
@@ -611,6 +587,36 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                 if let Some(idx) = app.namespaces.iter().position(|n| n == &current_namespace) {
                     app.selected_namespace = idx;
                 }
+
+                // Start the initial resource watcher (handle is tracked)
+                if let Some(h) = watcher_handle.take() {
+                    h.abort();
+                }
+                let mgr = k8s_manager.clone();
+                let action_tx = tx.clone();
+                let ns = app.current_namespace().to_string();
+                let rt = app.resource_type;
+                let handle = tokio::spawn(async move {
+                    let guard = mgr.lock().await;
+                    if let Some(ref manager) = *guard {
+                        let client = manager.client.clone();
+                        drop(guard);
+                        if let Err(e) = k8s::resources::watch_resources(
+                            client,
+                            &ns,
+                            rt,
+                            action_tx.clone(),
+                        )
+                        .await
+                        {
+                            let _ = action_tx.send(AppEvent::K8sError(format!(
+                                "Watch error: {}",
+                                e
+                            )));
+                        }
+                    }
+                });
+                watcher_handle = Some(handle);
             }
             AppEvent::K8sError(msg) => {
                 app.set_error(msg);
