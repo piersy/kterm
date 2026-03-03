@@ -189,11 +189,28 @@ impl App {
         }
     }
 
-    /// Reset dropdown state when entering a selector (dropdown stays hidden until user acts).
+    /// Reset dropdown state when entering a selector and show dropdown with current item selected.
     pub fn dropdown_open(&mut self) {
         self.dropdown_query.clear();
-        self.dropdown_visible = false;
+        self.dropdown_visible = true;
         self.update_dropdown_filter();
+        // Pre-select the currently active item in the dropdown
+        let current_item_idx = match self.focus {
+            Focus::ContextSelector => self.selected_context,
+            Focus::NamespaceSelector => self.selected_namespace,
+            Focus::ResourceTypeSelector => {
+                ResourceType::ALL
+                    .iter()
+                    .position(|&t| t == self.resource_type)
+                    .unwrap_or(0)
+            }
+            Focus::ResourceList => 0,
+        };
+        self.dropdown_selected = self
+            .dropdown_filtered
+            .iter()
+            .position(|&idx| idx == current_item_idx)
+            .unwrap_or(0);
     }
 
     /// Re-filter the dropdown items using fuzzy match on the query.
@@ -265,6 +282,8 @@ impl App {
             Focus::ContextSelector | Focus::NamespaceSelector | Focus::ResourceTypeSelector
         ) {
             self.dropdown_open();
+        } else {
+            self.dropdown_visible = false;
         }
         action
     }

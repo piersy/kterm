@@ -16,7 +16,7 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
     .split(area);
 
     let show_query_for = |focus: Focus| -> Option<&str> {
-        if app.focus == focus && app.dropdown_visible {
+        if app.focus == focus && app.dropdown_visible && !app.dropdown_query.is_empty() {
             Some(&app.dropdown_query)
         } else {
             None
