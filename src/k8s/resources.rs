@@ -35,16 +35,29 @@ async fn watch_pods(
     let api: Api<Pod> = Api::namespaced(client, namespace);
     let mut stream = watcher(api, watcher::Config::default())
         .default_backoff()
-        .applied_objects()
         .boxed();
 
     let mut cache: BTreeMap<String, Pod> = BTreeMap::new();
 
-    while let Some(pod) = stream.try_next().await? {
-        let name = ResourceExt::name_any(&pod);
-        let ns = ResourceExt::namespace(&pod).unwrap_or_default();
-        let key = format!("{}/{}", ns, name);
-        cache.insert(key, pod);
+    while let Some(event) = stream.try_next().await? {
+        match event {
+            watcher::Event::Apply(pod) | watcher::Event::InitApply(pod) => {
+                let name = ResourceExt::name_any(&pod);
+                let ns = ResourceExt::namespace(&pod).unwrap_or_default();
+                let key = format!("{}/{}", ns, name);
+                cache.insert(key, pod);
+            }
+            watcher::Event::Delete(pod) => {
+                let name = ResourceExt::name_any(&pod);
+                let ns = ResourceExt::namespace(&pod).unwrap_or_default();
+                let key = format!("{}/{}", ns, name);
+                cache.remove(&key);
+            }
+            watcher::Event::Init => {
+                cache.clear();
+            }
+            watcher::Event::InitDone => {}
+        }
 
         let items: Vec<ResourceItem> = cache.values().map(pod_to_resource_item).collect();
         if tx.send(AppEvent::ResourcesUpdated(items)).is_err() {
@@ -63,16 +76,29 @@ async fn watch_pvcs(
     let api: Api<PersistentVolumeClaim> = Api::namespaced(client, namespace);
     let mut stream = watcher(api, watcher::Config::default())
         .default_backoff()
-        .applied_objects()
         .boxed();
 
     let mut cache: BTreeMap<String, PersistentVolumeClaim> = BTreeMap::new();
 
-    while let Some(pvc) = stream.try_next().await? {
-        let name = ResourceExt::name_any(&pvc);
-        let ns = ResourceExt::namespace(&pvc).unwrap_or_default();
-        let key = format!("{}/{}", ns, name);
-        cache.insert(key, pvc);
+    while let Some(event) = stream.try_next().await? {
+        match event {
+            watcher::Event::Apply(pvc) | watcher::Event::InitApply(pvc) => {
+                let name = ResourceExt::name_any(&pvc);
+                let ns = ResourceExt::namespace(&pvc).unwrap_or_default();
+                let key = format!("{}/{}", ns, name);
+                cache.insert(key, pvc);
+            }
+            watcher::Event::Delete(pvc) => {
+                let name = ResourceExt::name_any(&pvc);
+                let ns = ResourceExt::namespace(&pvc).unwrap_or_default();
+                let key = format!("{}/{}", ns, name);
+                cache.remove(&key);
+            }
+            watcher::Event::Init => {
+                cache.clear();
+            }
+            watcher::Event::InitDone => {}
+        }
 
         let items: Vec<ResourceItem> = cache.values().map(pvc_to_resource_item).collect();
         if tx.send(AppEvent::ResourcesUpdated(items)).is_err() {
@@ -91,16 +117,29 @@ async fn watch_statefulsets(
     let api: Api<StatefulSet> = Api::namespaced(client, namespace);
     let mut stream = watcher(api, watcher::Config::default())
         .default_backoff()
-        .applied_objects()
         .boxed();
 
     let mut cache: BTreeMap<String, StatefulSet> = BTreeMap::new();
 
-    while let Some(ss) = stream.try_next().await? {
-        let name = ResourceExt::name_any(&ss);
-        let ns = ResourceExt::namespace(&ss).unwrap_or_default();
-        let key = format!("{}/{}", ns, name);
-        cache.insert(key, ss);
+    while let Some(event) = stream.try_next().await? {
+        match event {
+            watcher::Event::Apply(ss) | watcher::Event::InitApply(ss) => {
+                let name = ResourceExt::name_any(&ss);
+                let ns = ResourceExt::namespace(&ss).unwrap_or_default();
+                let key = format!("{}/{}", ns, name);
+                cache.insert(key, ss);
+            }
+            watcher::Event::Delete(ss) => {
+                let name = ResourceExt::name_any(&ss);
+                let ns = ResourceExt::namespace(&ss).unwrap_or_default();
+                let key = format!("{}/{}", ns, name);
+                cache.remove(&key);
+            }
+            watcher::Event::Init => {
+                cache.clear();
+            }
+            watcher::Event::InitDone => {}
+        }
 
         let items: Vec<ResourceItem> = cache.values().map(statefulset_to_resource_item).collect();
         if tx.send(AppEvent::ResourcesUpdated(items)).is_err() {
