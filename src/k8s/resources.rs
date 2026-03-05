@@ -396,6 +396,92 @@ pub async fn list_all_resources(
     }
 }
 
+async fn count_generic<T>(api: Api<T>) -> Result<usize>
+where
+    T: Resource<DynamicType = ()> + Clone + DeserializeOwned + Debug + Send + Sync + 'static,
+{
+    let list = api.list(&ListParams::default()).await?;
+    Ok(list.items.len())
+}
+
+/// Count resources for all types in the given namespace, returning a map of type to count.
+pub async fn count_all_resources(
+    client: Client,
+    namespace: &str,
+) -> std::collections::HashMap<ResourceType, usize> {
+    use std::collections::HashMap;
+    use tokio::join;
+
+    // Run all counts concurrently
+    let (
+        pods, deployments, statefulsets, daemonsets, replicasets, replicationcontrollers,
+        jobs, cronjobs, hpas, services, endpoints, ingresses, networkpolicies,
+        configmaps, secrets, pvcs, pvs, storageclasses, serviceaccounts,
+        namespaces, nodes, events, resourcequotas, limitranges, pdbs,
+    ) = join!(
+        count_generic(Api::<Pod>::namespaced(client.clone(), namespace)),
+        count_generic(Api::<Deployment>::namespaced(client.clone(), namespace)),
+        count_generic(Api::<StatefulSet>::namespaced(client.clone(), namespace)),
+        count_generic(Api::<DaemonSet>::namespaced(client.clone(), namespace)),
+        count_generic(Api::<ReplicaSet>::namespaced(client.clone(), namespace)),
+        count_generic(Api::<ReplicationController>::namespaced(client.clone(), namespace)),
+        count_generic(Api::<Job>::namespaced(client.clone(), namespace)),
+        count_generic(Api::<CronJob>::namespaced(client.clone(), namespace)),
+        count_generic(Api::<HorizontalPodAutoscaler>::namespaced(client.clone(), namespace)),
+        count_generic(Api::<Service>::namespaced(client.clone(), namespace)),
+        count_generic(Api::<Endpoints>::namespaced(client.clone(), namespace)),
+        count_generic(Api::<Ingress>::namespaced(client.clone(), namespace)),
+        count_generic(Api::<NetworkPolicy>::namespaced(client.clone(), namespace)),
+        count_generic(Api::<ConfigMap>::namespaced(client.clone(), namespace)),
+        count_generic(Api::<Secret>::namespaced(client.clone(), namespace)),
+        count_generic(Api::<PersistentVolumeClaim>::namespaced(client.clone(), namespace)),
+        count_generic(Api::<PersistentVolume>::all(client.clone())),
+        count_generic(Api::<StorageClass>::all(client.clone())),
+        count_generic(Api::<ServiceAccount>::namespaced(client.clone(), namespace)),
+        count_generic(Api::<Namespace>::all(client.clone())),
+        count_generic(Api::<Node>::all(client.clone())),
+        count_generic(Api::<Event>::namespaced(client.clone(), namespace)),
+        count_generic(Api::<ResourceQuota>::namespaced(client.clone(), namespace)),
+        count_generic(Api::<LimitRange>::namespaced(client.clone(), namespace)),
+        count_generic(Api::<PodDisruptionBudget>::namespaced(client.clone(), namespace)),
+    );
+
+    let mut counts = HashMap::new();
+    let pairs: [(ResourceType, Result<usize>); 25] = [
+        (ResourceType::Pods, pods),
+        (ResourceType::Deployments, deployments),
+        (ResourceType::StatefulSets, statefulsets),
+        (ResourceType::DaemonSets, daemonsets),
+        (ResourceType::ReplicaSets, replicasets),
+        (ResourceType::ReplicationControllers, replicationcontrollers),
+        (ResourceType::Jobs, jobs),
+        (ResourceType::CronJobs, cronjobs),
+        (ResourceType::HorizontalPodAutoscalers, hpas),
+        (ResourceType::Services, services),
+        (ResourceType::Endpoints, endpoints),
+        (ResourceType::Ingresses, ingresses),
+        (ResourceType::NetworkPolicies, networkpolicies),
+        (ResourceType::ConfigMaps, configmaps),
+        (ResourceType::Secrets, secrets),
+        (ResourceType::PersistentVolumeClaims, pvcs),
+        (ResourceType::PersistentVolumes, pvs),
+        (ResourceType::StorageClasses, storageclasses),
+        (ResourceType::ServiceAccounts, serviceaccounts),
+        (ResourceType::Namespaces, namespaces),
+        (ResourceType::Nodes, nodes),
+        (ResourceType::Events, events),
+        (ResourceType::ResourceQuotas, resourcequotas),
+        (ResourceType::LimitRanges, limitranges),
+        (ResourceType::PodDisruptionBudgets, pdbs),
+    ];
+    for (rt, result) in pairs {
+        if let Ok(count) = result {
+            counts.insert(rt, count);
+        }
+    }
+    counts
+}
+
 pub async fn describe_resource(
     client: Client,
     namespace: &str,

@@ -158,6 +158,14 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                                 // Start watching in same task (handle is tracked)
                                 let client = manager.client.clone();
                                 drop(guard);
+                                // Spawn count fetch in background
+                                let count_tx = action_tx.clone();
+                                let count_client = client.clone();
+                                let count_ns = ns.clone();
+                                tokio::spawn(async move {
+                                    let counts = k8s::resources::count_all_resources(count_client, &count_ns).await;
+                                    let _ = count_tx.send(AppEvent::ResourceCountsLoaded(counts));
+                                });
                                 if let Err(e) = k8s::resources::watch_resources(
                                     client,
                                     &ns,
@@ -175,7 +183,53 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                         });
                         watcher_handle = Some(handle);
                     }
-                    InputAction::NamespaceChanged | InputAction::ResourceTypeChanged => {
+                    InputAction::NamespaceChanged => {
+                        // Abort current watcher and start new one
+                        if let Some(h) = watcher_handle.take() {
+                            h.abort();
+                        }
+
+                        app.loading = true;
+                        app.resources.clear();
+                        app.resource_counts.clear();
+                        app.table_state.select(Some(0));
+
+                        let mgr = k8s_manager.clone();
+                        let action_tx = tx.clone();
+                        let ns = app.current_namespace().to_string();
+                        let rt = app.resource_type;
+
+                        let handle = tokio::spawn(async move {
+                            let guard = mgr.lock().await;
+                            if let Some(ref manager) = *guard {
+                                let client = manager.client.clone();
+                                drop(guard);
+                                // Spawn count fetch in background
+                                let count_tx = action_tx.clone();
+                                let count_client = client.clone();
+                                let count_ns = ns.clone();
+                                tokio::spawn(async move {
+                                    let counts = k8s::resources::count_all_resources(count_client, &count_ns).await;
+                                    let _ = count_tx.send(AppEvent::ResourceCountsLoaded(counts));
+                                });
+                                if let Err(e) = k8s::resources::watch_resources(
+                                    client,
+                                    &ns,
+                                    rt,
+                                    action_tx.clone(),
+                                )
+                                .await
+                                {
+                                    let _ = action_tx.send(AppEvent::K8sError(format!(
+                                        "Watch error: {}",
+                                        e
+                                    )));
+                                }
+                            }
+                        });
+                        watcher_handle = Some(handle);
+                    }
+                    InputAction::ResourceTypeChanged => {
                         // Abort current watcher and start new one
                         if let Some(h) = watcher_handle.take() {
                             h.abort();
@@ -194,7 +248,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                             let guard = mgr.lock().await;
                             if let Some(ref manager) = *guard {
                                 let client = manager.client.clone();
-                                drop(guard); // release lock before long operation
+                                drop(guard);
                                 if let Err(e) = k8s::resources::watch_resources(
                                     client,
                                     &ns,
@@ -601,6 +655,14 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                     if let Some(ref manager) = *guard {
                         let client = manager.client.clone();
                         drop(guard);
+                        // Spawn count fetch in background
+                        let count_tx = action_tx.clone();
+                        let count_client = client.clone();
+                        let count_ns = ns.clone();
+                        tokio::spawn(async move {
+                            let counts = k8s::resources::count_all_resources(count_client, &count_ns).await;
+                            let _ = count_tx.send(AppEvent::ResourceCountsLoaded(counts));
+                        });
                         if let Err(e) = k8s::resources::watch_resources(
                             client,
                             &ns,
@@ -617,6 +679,13 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                     }
                 });
                 watcher_handle = Some(handle);
+            }
+            AppEvent::ResourceCountsLoaded(counts) => {
+                app.resource_counts = counts;
+                // Refresh dropdown filter if resource type selector is active
+                if app.focus == types::Focus::ResourceTypeSelector {
+                    app.update_dropdown_filter();
+                }
             }
             AppEvent::K8sError(msg) => {
                 app.set_error(msg);
