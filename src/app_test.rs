@@ -222,11 +222,11 @@ mod tests {
         app.dropdown_open();
         assert_eq!(app.resource_type, ResourceType::Pods);
 
-        // Navigate down to PVCs (Down opens dropdown) and select
+        // Navigate down to Deployments (index 1) and select
         app.handle_input(key(KeyCode::Down));
         let action = app.handle_input(key(KeyCode::Enter));
         assert_eq!(action, InputAction::ResourceTypeChanged);
-        assert_eq!(app.resource_type, ResourceType::PersistentVolumeClaims);
+        assert_eq!(app.resource_type, ResourceType::Deployments);
         assert_eq!(app.focus, Focus::ResourceList);
     }
 
@@ -588,9 +588,9 @@ mod tests {
 
     #[test]
     fn test_resource_type_all_variants() {
-        assert_eq!(ResourceType::ALL.len(), 3);
+        assert_eq!(ResourceType::ALL.len(), 25);
         assert_eq!(ResourceType::ALL[0], ResourceType::Pods);
-        assert_eq!(ResourceType::ALL[1], ResourceType::PersistentVolumeClaims);
+        assert_eq!(ResourceType::ALL[1], ResourceType::Deployments);
         assert_eq!(ResourceType::ALL[2], ResourceType::StatefulSets);
     }
 

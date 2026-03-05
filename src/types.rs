@@ -1,36 +1,154 @@
 use std::fmt;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ResourceType {
+    // Workloads
     Pods,
-    PersistentVolumeClaims,
+    Deployments,
     StatefulSets,
+    DaemonSets,
+    ReplicaSets,
+    ReplicationControllers,
+    Jobs,
+    CronJobs,
+    HorizontalPodAutoscalers,
+
+    // Service & Networking
+    Services,
+    Endpoints,
+    Ingresses,
+    NetworkPolicies,
+
+    // Config & Storage
+    ConfigMaps,
+    Secrets,
+    PersistentVolumeClaims,
+    PersistentVolumes,
+    StorageClasses,
+
+    // Auth
+    ServiceAccounts,
+
+    // Cluster
+    Namespaces,
+    Nodes,
+    Events,
+    ResourceQuotas,
+    LimitRanges,
+    PodDisruptionBudgets,
 }
 
 impl ResourceType {
-    pub const ALL: [ResourceType; 3] = [
+    pub const ALL: [ResourceType; 25] = [
         ResourceType::Pods,
-        ResourceType::PersistentVolumeClaims,
+        ResourceType::Deployments,
         ResourceType::StatefulSets,
+        ResourceType::DaemonSets,
+        ResourceType::ReplicaSets,
+        ResourceType::ReplicationControllers,
+        ResourceType::Jobs,
+        ResourceType::CronJobs,
+        ResourceType::HorizontalPodAutoscalers,
+        ResourceType::Services,
+        ResourceType::Endpoints,
+        ResourceType::Ingresses,
+        ResourceType::NetworkPolicies,
+        ResourceType::ConfigMaps,
+        ResourceType::Secrets,
+        ResourceType::PersistentVolumeClaims,
+        ResourceType::PersistentVolumes,
+        ResourceType::StorageClasses,
+        ResourceType::ServiceAccounts,
+        ResourceType::Namespaces,
+        ResourceType::Nodes,
+        ResourceType::Events,
+        ResourceType::ResourceQuotas,
+        ResourceType::LimitRanges,
+        ResourceType::PodDisruptionBudgets,
     ];
 
     pub fn column_headers(&self) -> Vec<&'static str> {
         match self {
             ResourceType::Pods => vec!["NAME", "STATUS", "AGE", "RESTARTS", "NODE"],
+            ResourceType::Deployments => {
+                vec!["NAME", "READY", "UP-TO-DATE", "AVAILABLE", "AGE"]
+            }
+            ResourceType::StatefulSets => vec!["NAME", "READY", "AGE"],
+            ResourceType::DaemonSets => vec!["NAME", "DESIRED", "CURRENT", "READY", "AGE"],
+            ResourceType::ReplicaSets => vec!["NAME", "DESIRED", "CURRENT", "READY", "AGE"],
+            ResourceType::ReplicationControllers => {
+                vec!["NAME", "DESIRED", "CURRENT", "READY", "AGE"]
+            }
+            ResourceType::Jobs => vec!["NAME", "COMPLETIONS", "AGE"],
+            ResourceType::CronJobs => vec!["NAME", "SCHEDULE", "SUSPEND", "ACTIVE", "AGE"],
+            ResourceType::HorizontalPodAutoscalers => {
+                vec!["NAME", "MINPODS", "MAXPODS", "REPLICAS", "AGE"]
+            }
+            ResourceType::Services => vec!["NAME", "TYPE", "CLUSTER-IP", "PORTS", "AGE"],
+            ResourceType::Endpoints => vec!["NAME", "ENDPOINTS", "AGE"],
+            ResourceType::Ingresses => vec!["NAME", "CLASS", "HOSTS", "AGE"],
+            ResourceType::NetworkPolicies => vec!["NAME", "POD-SELECTOR", "AGE"],
+            ResourceType::ConfigMaps => vec!["NAME", "DATA", "AGE"],
+            ResourceType::Secrets => vec!["NAME", "TYPE", "DATA", "AGE"],
             ResourceType::PersistentVolumeClaims => {
                 vec!["NAME", "STATUS", "VOLUME", "CAPACITY", "AGE"]
             }
-            ResourceType::StatefulSets => vec!["NAME", "READY", "AGE"],
+            ResourceType::PersistentVolumes => {
+                vec!["NAME", "CAPACITY", "STATUS", "STORAGECLASS", "AGE"]
+            }
+            ResourceType::StorageClasses => vec!["NAME", "PROVISIONER", "AGE"],
+            ResourceType::ServiceAccounts => vec!["NAME", "AGE"],
+            ResourceType::Namespaces => vec!["NAME", "STATUS", "AGE"],
+            ResourceType::Nodes => vec!["NAME", "STATUS", "ROLES", "AGE"],
+            ResourceType::Events => vec!["NAME", "TYPE", "REASON", "MESSAGE", "AGE"],
+            ResourceType::ResourceQuotas => vec!["NAME", "AGE"],
+            ResourceType::LimitRanges => vec!["NAME", "AGE"],
+            ResourceType::PodDisruptionBudgets => {
+                vec!["NAME", "MIN-AVAILABLE", "MAX-UNAVAILABLE", "AGE"]
+            }
         }
+    }
+
+    /// Returns true for cluster-scoped resources (not namespaced).
+    pub fn is_cluster_scoped(&self) -> bool {
+        matches!(
+            self,
+            ResourceType::Nodes
+                | ResourceType::PersistentVolumes
+                | ResourceType::StorageClasses
+                | ResourceType::Namespaces
+        )
     }
 }
 
 impl fmt::Display for ResourceType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ResourceType::Pods => write!(f, "Pods"),
-            ResourceType::PersistentVolumeClaims => write!(f, "PVCs"),
-            ResourceType::StatefulSets => write!(f, "StatefulSets"),
+            ResourceType::Pods => write!(f, "pods"),
+            ResourceType::Deployments => write!(f, "deployments"),
+            ResourceType::StatefulSets => write!(f, "statefulsets"),
+            ResourceType::DaemonSets => write!(f, "daemonsets"),
+            ResourceType::ReplicaSets => write!(f, "replicasets"),
+            ResourceType::ReplicationControllers => write!(f, "replicationcontrollers"),
+            ResourceType::Jobs => write!(f, "jobs"),
+            ResourceType::CronJobs => write!(f, "cronjobs"),
+            ResourceType::HorizontalPodAutoscalers => write!(f, "horizontalpodautoscalers"),
+            ResourceType::Services => write!(f, "services"),
+            ResourceType::Endpoints => write!(f, "endpoints"),
+            ResourceType::Ingresses => write!(f, "ingresses"),
+            ResourceType::NetworkPolicies => write!(f, "networkpolicies"),
+            ResourceType::ConfigMaps => write!(f, "configmaps"),
+            ResourceType::Secrets => write!(f, "secrets"),
+            ResourceType::PersistentVolumeClaims => write!(f, "persistentvolumeclaims"),
+            ResourceType::PersistentVolumes => write!(f, "persistentvolumes"),
+            ResourceType::StorageClasses => write!(f, "storageclasses"),
+            ResourceType::ServiceAccounts => write!(f, "serviceaccounts"),
+            ResourceType::Namespaces => write!(f, "namespaces"),
+            ResourceType::Nodes => write!(f, "nodes"),
+            ResourceType::Events => write!(f, "events"),
+            ResourceType::ResourceQuotas => write!(f, "resourcequotas"),
+            ResourceType::LimitRanges => write!(f, "limitranges"),
+            ResourceType::PodDisruptionBudgets => write!(f, "poddisruptionbudgets"),
         }
     }
 }
@@ -100,34 +218,20 @@ pub struct ResourceItem {
 impl ResourceItem {
     /// Returns column values matching the headers for the given resource type.
     pub fn columns(&self, resource_type: ResourceType) -> Vec<String> {
-        match resource_type {
-            ResourceType::Pods => {
-                let restarts = self.extra_val("restarts");
-                let node = self.extra_val("node");
-                vec![
-                    self.name.clone(),
-                    self.status.clone(),
-                    self.age.clone(),
-                    restarts,
-                    node,
-                ]
-            }
-            ResourceType::PersistentVolumeClaims => {
-                let volume = self.extra_val("volume");
-                let capacity = self.extra_val("capacity");
-                vec![
-                    self.name.clone(),
-                    self.status.clone(),
-                    volume,
-                    capacity,
-                    self.age.clone(),
-                ]
-            }
-            ResourceType::StatefulSets => {
-                let ready = self.extra_val("ready");
-                vec![self.name.clone(), ready, self.age.clone()]
-            }
-        }
+        resource_type
+            .column_headers()
+            .iter()
+            .map(|h| {
+                let key = h.to_lowercase();
+                match key.as_str() {
+                    "name" => self.name.clone(),
+                    "status" | "phase" => self.status.clone(),
+                    "age" => self.age.clone(),
+                    "namespace" => self.namespace.clone(),
+                    _ => self.extra_val(&key),
+                }
+            })
+            .collect()
     }
 
     fn extra_val(&self, key: &str) -> String {

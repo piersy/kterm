@@ -2,6 +2,8 @@ use crossterm::event::{EventStream, KeyEvent};
 use futures::StreamExt;
 use tokio::sync::mpsc;
 
+use std::collections::HashMap;
+
 use crate::types::{ResourceItem, ResourceType};
 
 #[derive(Debug)]
@@ -25,6 +27,7 @@ pub enum AppEvent {
         resource_type: ResourceType,
         items: Vec<ResourceItem>,
     },
+    ResourceCountsLoaded(HashMap<ResourceType, usize>),
     SearchScanComplete(String),
 }
 

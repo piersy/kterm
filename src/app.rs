@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::widgets::TableState;
 
@@ -56,6 +58,9 @@ pub struct App {
     pub search_contexts_done: usize,
     pub entered_from_search: bool,
 
+    // Resource counts per type (for dropdown display)
+    pub resource_counts: HashMap<ResourceType, usize>,
+
     // Quit
     pub should_quit: bool,
 }
@@ -106,6 +111,8 @@ impl App {
             search_contexts_total: 0,
             search_contexts_done: 0,
             entered_from_search: false,
+
+            resource_counts: HashMap::new(),
 
             should_quit: false,
         };
@@ -183,10 +190,48 @@ impl App {
             Focus::ContextSelector => self.contexts.clone(),
             Focus::NamespaceSelector => self.namespaces.clone(),
             Focus::ResourceTypeSelector => {
-                ResourceType::ALL.iter().map(|t| t.to_string()).collect()
+                self.visible_resource_types().into_iter().map(|(label, _)| label).collect()
             }
             Focus::ResourceList => Vec::new(),
         }
+    }
+
+    /// Returns visible resource types as (display_label, ALL_index) pairs.
+    /// When counts are available, filters out zero-count types and appends count.
+    /// The currently selected type is always included.
+    pub fn visible_resource_types(&self) -> Vec<(String, usize)> {
+        if self.resource_counts.is_empty() {
+            // No counts loaded yet — show all types without counts
+            ResourceType::ALL
+                .iter()
+                .enumerate()
+                .map(|(i, t)| (t.to_string(), i))
+                .collect()
+        } else {
+            ResourceType::ALL
+                .iter()
+                .enumerate()
+                .filter_map(|(i, t)| {
+                    let count = self.resource_counts.get(t).copied().unwrap_or(0);
+                    if count > 0 || *t == self.resource_type {
+                        let label = if count > 0 {
+                            format!("{} ({})", t, count)
+                        } else {
+                            t.to_string()
+                        };
+                        Some((label, i))
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        }
+    }
+
+    /// Maps a dropdown item index (for ResourceTypeSelector) back to a ResourceType::ALL index.
+    fn resource_type_all_index(&self, dropdown_item_idx: usize) -> usize {
+        let visible = self.visible_resource_types();
+        visible.get(dropdown_item_idx).map(|(_, all_idx)| *all_idx).unwrap_or(0)
     }
 
     /// Reset dropdown state when entering a selector and show dropdown with current item selected.
@@ -199,9 +244,9 @@ impl App {
             Focus::ContextSelector => self.selected_context,
             Focus::NamespaceSelector => self.selected_namespace,
             Focus::ResourceTypeSelector => {
-                ResourceType::ALL
+                self.visible_resource_types()
                     .iter()
-                    .position(|&t| t == self.resource_type)
+                    .position(|(_, all_idx)| ResourceType::ALL[*all_idx] == self.resource_type)
                     .unwrap_or(0)
             }
             Focus::ResourceList => 0,
@@ -259,7 +304,8 @@ impl App {
                         }
                     }
                     Focus::ResourceTypeSelector => {
-                        let new_type = ResourceType::ALL[item_idx];
+                        let all_idx = self.resource_type_all_index(item_idx);
+                        let new_type = ResourceType::ALL[all_idx];
                         if new_type != self.resource_type {
                             self.resource_type = new_type;
                             InputAction::ResourceTypeChanged
