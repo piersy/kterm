@@ -94,8 +94,8 @@ mod tests {
         let output = render_to_string(&mut app, 100, 24);
 
         assert!(
-            output.contains("po"),
-            "Header should show resource type 'po'"
+            output.contains("pods"),
+            "Header should show resource type 'pods'"
         );
     }
 
@@ -510,7 +510,7 @@ mod tests {
         app.resources = vec![];
         // Should not panic
         let output = render_to_string(&mut app, 100, 24);
-        assert!(output.contains("po"), "Should still show resource type header");
+        assert!(output.contains("pods"), "Should still show resource type header");
     }
 
     // --- Navigation Flow Integration ---
@@ -609,7 +609,7 @@ mod tests {
         }];
         let ss_output = render_to_string(&mut app, 100, 30);
         assert!(ss_output.contains("READY"));
-        assert!(ss_output.contains("sts"));
+        assert!(ss_output.contains("statefulsets"));
         assert!(!ss_output.contains("NODE"));
     }
 
@@ -762,13 +762,13 @@ mod tests {
         let output = render_to_string(&mut app, 120, 24);
 
         assert!(
-            output.contains("po"),
-            "Search results should show resource type 'po', got:\n{}",
+            output.contains("pods"),
+            "Search results should show resource type 'pods', got:\n{}",
             output
         );
         assert!(
-            output.contains("sts"),
-            "Search results should show 'sts' type"
+            output.contains("statefulsets"),
+            "Search results should show 'statefulsets' type"
         );
     }
 
