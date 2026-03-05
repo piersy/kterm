@@ -73,6 +73,7 @@ fn column_widths(resource_type: crate::types::ResourceType) -> Vec<ratatui::layo
     use ratatui::layout::Constraint;
 
     match resource_type {
+        // 5 columns: NAME, STATUS, AGE, RESTARTS, NODE
         ResourceType::Pods => vec![
             Constraint::Percentage(30),
             Constraint::Percentage(15),
@@ -80,6 +81,91 @@ fn column_widths(resource_type: crate::types::ResourceType) -> Vec<ratatui::layo
             Constraint::Percentage(15),
             Constraint::Percentage(25),
         ],
+        // 5 columns: NAME, READY, UP-TO-DATE, AVAILABLE, AGE
+        ResourceType::Deployments => vec![
+            Constraint::Percentage(30),
+            Constraint::Percentage(15),
+            Constraint::Percentage(20),
+            Constraint::Percentage(20),
+            Constraint::Percentage(15),
+        ],
+        // 3 columns: NAME, READY, AGE
+        ResourceType::StatefulSets => vec![
+            Constraint::Percentage(40),
+            Constraint::Percentage(30),
+            Constraint::Percentage(30),
+        ],
+        // 5 columns: NAME, DESIRED, CURRENT, READY, AGE
+        ResourceType::DaemonSets | ResourceType::ReplicaSets | ResourceType::ReplicationControllers => vec![
+            Constraint::Percentage(30),
+            Constraint::Percentage(15),
+            Constraint::Percentage(15),
+            Constraint::Percentage(15),
+            Constraint::Percentage(25),
+        ],
+        // 3 columns: NAME, COMPLETIONS, AGE
+        ResourceType::Jobs => vec![
+            Constraint::Percentage(40),
+            Constraint::Percentage(30),
+            Constraint::Percentage(30),
+        ],
+        // 5 columns: NAME, SCHEDULE, SUSPEND, ACTIVE, AGE
+        ResourceType::CronJobs => vec![
+            Constraint::Percentage(25),
+            Constraint::Percentage(25),
+            Constraint::Percentage(15),
+            Constraint::Percentage(15),
+            Constraint::Percentage(20),
+        ],
+        // 5 columns: NAME, MINPODS, MAXPODS, REPLICAS, AGE
+        ResourceType::HorizontalPodAutoscalers => vec![
+            Constraint::Percentage(30),
+            Constraint::Percentage(15),
+            Constraint::Percentage(15),
+            Constraint::Percentage(15),
+            Constraint::Percentage(25),
+        ],
+        // 5 columns: NAME, TYPE, CLUSTER-IP, PORTS, AGE
+        ResourceType::Services => vec![
+            Constraint::Percentage(25),
+            Constraint::Percentage(15),
+            Constraint::Percentage(20),
+            Constraint::Percentage(25),
+            Constraint::Percentage(15),
+        ],
+        // 3 columns: NAME, ENDPOINTS, AGE
+        ResourceType::Endpoints => vec![
+            Constraint::Percentage(30),
+            Constraint::Percentage(50),
+            Constraint::Percentage(20),
+        ],
+        // 4 columns: NAME, CLASS, HOSTS, AGE
+        ResourceType::Ingresses => vec![
+            Constraint::Percentage(25),
+            Constraint::Percentage(20),
+            Constraint::Percentage(35),
+            Constraint::Percentage(20),
+        ],
+        // 3 columns: NAME, POD-SELECTOR, AGE
+        ResourceType::NetworkPolicies => vec![
+            Constraint::Percentage(30),
+            Constraint::Percentage(50),
+            Constraint::Percentage(20),
+        ],
+        // 3 columns: NAME, DATA, AGE
+        ResourceType::ConfigMaps => vec![
+            Constraint::Percentage(50),
+            Constraint::Percentage(20),
+            Constraint::Percentage(30),
+        ],
+        // 4 columns: NAME, TYPE, DATA, AGE
+        ResourceType::Secrets => vec![
+            Constraint::Percentage(30),
+            Constraint::Percentage(30),
+            Constraint::Percentage(15),
+            Constraint::Percentage(25),
+        ],
+        // 5 columns: NAME, STATUS, VOLUME, CAPACITY, AGE
         ResourceType::PersistentVolumeClaims => vec![
             Constraint::Percentage(25),
             Constraint::Percentage(15),
@@ -87,21 +173,65 @@ fn column_widths(resource_type: crate::types::ResourceType) -> Vec<ratatui::layo
             Constraint::Percentage(15),
             Constraint::Percentage(20),
         ],
-        ResourceType::StatefulSets => vec![
+        // 5 columns: NAME, CAPACITY, STATUS, STORAGECLASS, AGE
+        ResourceType::PersistentVolumes => vec![
+            Constraint::Percentage(25),
+            Constraint::Percentage(15),
+            Constraint::Percentage(15),
+            Constraint::Percentage(25),
+            Constraint::Percentage(20),
+        ],
+        // 3 columns: NAME, PROVISIONER, AGE
+        ResourceType::StorageClasses => vec![
+            Constraint::Percentage(30),
+            Constraint::Percentage(50),
+            Constraint::Percentage(20),
+        ],
+        // 2 columns: NAME, AGE
+        ResourceType::ServiceAccounts | ResourceType::ResourceQuotas | ResourceType::LimitRanges => vec![
+            Constraint::Percentage(60),
+            Constraint::Percentage(40),
+        ],
+        // 3 columns: NAME, STATUS, AGE
+        ResourceType::Namespaces => vec![
             Constraint::Percentage(40),
             Constraint::Percentage(30),
             Constraint::Percentage(30),
+        ],
+        // 4 columns: NAME, STATUS, ROLES, AGE
+        ResourceType::Nodes => vec![
+            Constraint::Percentage(30),
+            Constraint::Percentage(20),
+            Constraint::Percentage(25),
+            Constraint::Percentage(25),
+        ],
+        // 5 columns: NAME, TYPE, REASON, MESSAGE, AGE
+        ResourceType::Events => vec![
+            Constraint::Percentage(20),
+            Constraint::Percentage(10),
+            Constraint::Percentage(15),
+            Constraint::Percentage(40),
+            Constraint::Percentage(15),
+        ],
+        // 4 columns: NAME, MIN-AVAILABLE, MAX-UNAVAILABLE, AGE
+        ResourceType::PodDisruptionBudgets => vec![
+            Constraint::Percentage(30),
+            Constraint::Percentage(25),
+            Constraint::Percentage(25),
+            Constraint::Percentage(20),
         ],
     }
 }
 
 fn status_style(status: &str) -> Style {
     match status {
-        "Running" | "Bound" | "Active" => Style::default().fg(Color::Green),
-        "Pending" | "ContainerCreating" => Style::default().fg(Color::Yellow),
-        "Failed" | "Error" | "CrashLoopBackOff" | "Lost" => Style::default().fg(Color::Red),
+        "Running" | "Bound" | "Active" | "Ready" | "Available" => Style::default().fg(Color::Green),
+        "Pending" | "ContainerCreating" | "Updating" => Style::default().fg(Color::Yellow),
+        "Failed" | "Error" | "CrashLoopBackOff" | "Lost" | "NotReady" => {
+            Style::default().fg(Color::Red)
+        }
         "Terminating" => Style::default().fg(Color::Magenta),
-        "Succeeded" | "Completed" => Style::default().fg(Color::Blue),
+        "Succeeded" | "Completed" | "Released" => Style::default().fg(Color::Blue),
         _ => Style::default(),
     }
 }

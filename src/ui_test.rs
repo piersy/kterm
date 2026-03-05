@@ -94,8 +94,8 @@ mod tests {
         let output = render_to_string(&mut app, 100, 24);
 
         assert!(
-            output.contains("Pods"),
-            "Header should show resource type 'Pods'"
+            output.contains("po"),
+            "Header should show resource type 'po'"
         );
     }
 
@@ -510,7 +510,7 @@ mod tests {
         app.resources = vec![];
         // Should not panic
         let output = render_to_string(&mut app, 100, 24);
-        assert!(output.contains("Pods"), "Should still show resource type header");
+        assert!(output.contains("po"), "Should still show resource type header");
     }
 
     // --- Navigation Flow Integration ---
@@ -595,8 +595,8 @@ mod tests {
         let pods_output = render_to_string(&mut app, 100, 30);
         assert!(pods_output.contains("NODE"));
 
-        // Navigate down twice in dropdown: Pods -> PVCs -> StatefulSets
-        app.handle_input(key(KeyCode::Down)); // PVCs
+        // Navigate down twice in dropdown: Pods -> Deployments -> StatefulSets
+        app.handle_input(key(KeyCode::Down)); // Deployments
         app.handle_input(key(KeyCode::Down)); // StatefulSets
         app.handle_input(key(KeyCode::Enter)); // Confirm StatefulSets
         app.resources = vec![ResourceItem {
@@ -609,7 +609,7 @@ mod tests {
         }];
         let ss_output = render_to_string(&mut app, 100, 30);
         assert!(ss_output.contains("READY"));
-        assert!(ss_output.contains("StatefulSets"));
+        assert!(ss_output.contains("sts"));
         assert!(!ss_output.contains("NODE"));
     }
 
@@ -762,13 +762,13 @@ mod tests {
         let output = render_to_string(&mut app, 120, 24);
 
         assert!(
-            output.contains("Pods"),
-            "Search results should show resource type, got:\n{}",
+            output.contains("po"),
+            "Search results should show resource type 'po', got:\n{}",
             output
         );
         assert!(
-            output.contains("StatefulSets"),
-            "Search results should show StatefulSets type"
+            output.contains("sts"),
+            "Search results should show 'sts' type"
         );
     }
 
