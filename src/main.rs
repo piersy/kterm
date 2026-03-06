@@ -454,42 +454,51 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                             let ctx = context.clone();
                             let search_tx = tx.clone();
                             tokio::spawn(async move {
-                                match k8s::client::K8sManager::client_for_context(&ctx).await {
-                                    Ok(client) => {
-                                        for rt in types::ResourceType::ALL.iter() {
-                                            let rt = *rt;
-                                            match k8s::resources::list_all_resources(
-                                                client.clone(),
-                                                rt,
-                                            )
-                                            .await
-                                            {
-                                                Ok(items) => {
-                                                    let _ = search_tx.send(
-                                                        AppEvent::SearchResultsBatch {
-                                                            context: ctx.clone(),
-                                                            resource_type: rt,
-                                                            items,
-                                                        },
-                                                    );
-                                                }
-                                                Err(e) => {
-                                                    let _ = search_tx.send(AppEvent::K8sError(
-                                                        format!(
-                                                            "Search {}/{}: {}",
-                                                            ctx, rt, e
-                                                        ),
-                                                    ));
-                                                }
+                                let scan_future = async {
+                                    let client = k8s::client::K8sManager::client_for_context(&ctx).await
+                                        .map_err(|e| format!("Connect to {}: {}", ctx, e))?;
+                                    for rt in types::ResourceType::ALL.iter() {
+                                        let rt = *rt;
+                                        match k8s::resources::list_all_resources(
+                                            client.clone(),
+                                            rt,
+                                        )
+                                        .await
+                                        {
+                                            Ok(items) => {
+                                                let _ = search_tx.send(
+                                                    AppEvent::SearchResultsBatch {
+                                                        context: ctx.clone(),
+                                                        resource_type: rt,
+                                                        items,
+                                                    },
+                                                );
+                                            }
+                                            Err(e) => {
+                                                let _ = search_tx.send(AppEvent::K8sError(
+                                                    format!(
+                                                        "Search {}/{}: {}",
+                                                        ctx, rt, e
+                                                    ),
+                                                ));
                                             }
                                         }
                                     }
-                                    Err(e) => {
-                                        let _ = search_tx.send(AppEvent::K8sError(format!(
-                                            "Connect to {}: {}",
-                                            ctx, e
-                                        )));
+                                    Ok::<(), String>(())
+                                };
+                                match tokio::time::timeout(
+                                    std::time::Duration::from_secs(30),
+                                    scan_future,
+                                ).await {
+                                    Ok(Err(e)) => {
+                                        let _ = search_tx.send(AppEvent::K8sError(e));
                                     }
+                                    Err(_) => {
+                                        let _ = search_tx.send(AppEvent::K8sError(
+                                            format!("Search timed out for cluster: {}", ctx),
+                                        ));
+                                    }
+                                    Ok(Ok(())) => {}
                                 }
                                 let _ =
                                     search_tx.send(AppEvent::SearchScanComplete(ctx));
