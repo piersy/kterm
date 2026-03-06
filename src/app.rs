@@ -170,7 +170,14 @@ impl App {
                 .iter()
                 .enumerate()
                 .filter_map(|(i, r)| {
-                    fuzzy_match(&self.search_query, &r.resource.name).map(|score| (i, score))
+                    // Match against all visible fields: name, type, namespace, cluster
+                    let scores = [
+                        fuzzy_match(&self.search_query, &r.resource.name),
+                        fuzzy_match(&self.search_query, &r.resource_type.to_string()),
+                        fuzzy_match(&self.search_query, &r.resource.namespace),
+                        fuzzy_match(&self.search_query, &r.context),
+                    ];
+                    scores.into_iter().flatten().max().map(|score| (i, score))
                 })
                 .collect();
             scored.sort_by(|a, b| b.1.cmp(&a.1));
