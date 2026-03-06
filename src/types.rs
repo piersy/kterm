@@ -109,6 +109,22 @@ impl ResourceType {
         }
     }
 
+    /// Returns true if this resource type supports viewing logs.
+    pub fn supports_logs(&self) -> bool {
+        matches!(self, ResourceType::Pods)
+    }
+
+    /// Returns true if this resource type supports restart.
+    pub fn supports_restart(&self) -> bool {
+        matches!(
+            self,
+            ResourceType::Pods
+                | ResourceType::Deployments
+                | ResourceType::StatefulSets
+                | ResourceType::DaemonSets
+        )
+    }
+
     /// Returns true for cluster-scoped resources (not namespaced).
     pub fn is_cluster_scoped(&self) -> bool {
         matches!(

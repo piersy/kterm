@@ -7,8 +7,46 @@ use ratatui::Frame;
 use crate::app::App;
 use crate::types::{ConfirmAction, Focus, ViewMode};
 
+fn resource_list_bindings(app: &App) -> String {
+    let mut parts = vec!["q:Quit", "Tab:Selector", "j/k:Nav", "Enter:Detail"];
+    if app.resource_type.supports_logs() {
+        parts.push("l:Logs");
+    }
+    parts.push("d:Delete");
+    if app.resource_type.supports_restart() {
+        parts.push("r:Restart");
+    }
+    parts.push("e:Edit");
+    parts.push("/:Filter");
+    parts.push("Ctrl+F:Search");
+    parts.join("  ")
+}
+
+fn detail_bindings(app: &App) -> String {
+    let mut parts = vec!["Esc:Back", "j/k:Scroll", "e:Edit"];
+    if app.resource_type.supports_logs() {
+        parts.push("l:Logs");
+    }
+    parts.push("d:Delete");
+    if app.resource_type.supports_restart() {
+        parts.push("r:Restart");
+    }
+    parts.push("g/G:Top/Bottom");
+    parts.join("  ")
+}
+
+fn search_detail_bindings(app: &App) -> String {
+    let mut parts = vec!["Esc:Back to search", "j/k:Scroll"];
+    if app.resource_type.supports_logs() {
+        parts.push("l:Logs");
+    }
+    parts.push("g/G:Top/Bottom");
+    parts.join("  ")
+}
+
 pub fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
-    let bindings = match app.view_mode {
+    let bindings_owned: String;
+    let bindings: &str = match app.view_mode {
         ViewMode::List => {
             if app.filter_active {
                 "Esc:Cancel  Enter:Apply  Type to filter..."
@@ -24,13 +62,18 @@ pub fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
                     "Esc:Back  Tab:Next  Type/Arrows:Search..."
                 }
             } else {
-                "q:Quit  Tab:Selector  j/k:Nav  Enter:Detail  l:Logs  d:Delete  r:Restart  e:Edit  /:Filter  Ctrl+F:Search"
+                bindings_owned = resource_list_bindings(app);
+                &bindings_owned
             }
         }
         ViewMode::Detail if app.entered_from_search => {
-            "Esc:Back to search  j/k:Scroll  l:Logs  g/G:Top/Bottom"
+            bindings_owned = search_detail_bindings(app);
+            &bindings_owned
         }
-        ViewMode::Detail => "Esc:Back  j/k:Scroll  e:Edit  l:Logs  d:Delete  r:Restart  g/G:Top/Bottom",
+        ViewMode::Detail => {
+            bindings_owned = detail_bindings(app);
+            &bindings_owned
+        }
         ViewMode::Logs if app.entered_from_search => {
             "Esc:Back to search  f:Follow  j/k:Scroll  g/G:Top/Bottom  o:Vim  O:Less"
         }
@@ -40,7 +83,7 @@ pub fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
     };
 
     let mut spans = vec![Span::styled(
-        bindings,
+        bindings.to_owned(),
         Style::default().fg(Color::DarkGray),
     )];
 

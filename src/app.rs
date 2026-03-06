@@ -491,7 +491,7 @@ impl App {
                 }
             }
             KeyCode::Char('l') => {
-                if self.resource_type == ResourceType::Pods && self.selected_resource().is_some() {
+                if self.resource_type.supports_logs() && self.selected_resource().is_some() {
                     self.view_mode = ViewMode::Logs;
                     self.log_lines.clear();
                     self.log_scroll = 0;
@@ -508,7 +508,7 @@ impl App {
                 InputAction::None
             }
             KeyCode::Char('r') => {
-                if self.selected_resource().is_some() {
+                if self.resource_type.supports_restart() && self.selected_resource().is_some() {
                     self.view_mode = ViewMode::Confirm(ConfirmAction::Restart);
                 }
                 InputAction::None
@@ -648,7 +648,7 @@ impl App {
                 InputAction::None
             }
             KeyCode::Char('l') => {
-                if self.resource_type == ResourceType::Pods && self.selected_resource().is_some() {
+                if self.resource_type.supports_logs() && self.selected_resource().is_some() {
                     self.view_mode = ViewMode::Logs;
                     self.log_lines.clear();
                     self.log_scroll = 0;
@@ -665,7 +665,7 @@ impl App {
                 InputAction::None
             }
             KeyCode::Char('r') => {
-                if self.selected_resource().is_some() {
+                if self.resource_type.supports_restart() && self.selected_resource().is_some() {
                     self.view_mode = ViewMode::Confirm(ConfirmAction::Restart);
                 }
                 InputAction::None
