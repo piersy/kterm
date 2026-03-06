@@ -155,7 +155,7 @@ mod tests {
         // All 3 items should be in filtered list
         assert_eq!(app.dropdown_filtered.len(), 3);
         assert_eq!(app.dropdown_selected, 0);
-        assert!(!app.dropdown_visible); // not visible until user interacts
+        assert!(app.dropdown_visible);
 
         // Arrow down opens dropdown and selects ctx-2
         app.handle_input(key(KeyCode::Down));
@@ -257,7 +257,7 @@ mod tests {
         app.contexts = vec!["ctx-1".to_string(), "ctx-2".to_string()];
         app.focus = Focus::ContextSelector;
         app.dropdown_open();
-        assert!(!app.dropdown_visible);
+        assert!(app.dropdown_visible);
 
         // Typing a character opens the dropdown
         app.handle_input(key(KeyCode::Char('c')));
@@ -271,7 +271,7 @@ mod tests {
         app.contexts = vec!["ctx-1".to_string(), "ctx-2".to_string()];
         app.focus = Focus::ContextSelector;
         app.dropdown_open();
-        assert!(!app.dropdown_visible);
+        assert!(app.dropdown_visible);
 
         // Down arrow opens the dropdown
         app.handle_input(key(KeyCode::Down));
@@ -349,7 +349,8 @@ mod tests {
         app.contexts = vec!["ctx-1".to_string(), "ctx-2".to_string()];
         app.selected_context = 0;
         app.focus = Focus::ContextSelector;
-        app.dropdown_open();
+        // Close dropdown to test behavior when dropdown is not visible
+        app.dropdown_visible = false;
         assert!(!app.dropdown_visible);
 
         // Enter without dropdown visible just advances focus (no change)

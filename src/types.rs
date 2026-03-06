@@ -125,6 +125,7 @@ impl ResourceType {
         )
     }
 
+    #[allow(dead_code)]
     /// Returns true for cluster-scoped resources (not namespaced).
     pub fn is_cluster_scoped(&self) -> bool {
         matches!(

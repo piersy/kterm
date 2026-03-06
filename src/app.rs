@@ -359,18 +359,19 @@ impl App {
         }
 
         // Global Ctrl+F to enter search (from List or selector views, not from other modes)
-        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('f') {
-            if self.view_mode == ViewMode::List {
-                self.view_mode = ViewMode::Search;
-                self.search_query.clear();
-                self.search_results.clear();
-                self.search_filtered.clear();
-                self.search_table_state.select(None);
-                self.search_loading = true;
-                self.search_contexts_done = 0;
-                self.entered_from_search = false;
-                return InputAction::StartSearch;
-            }
+        if key.modifiers.contains(KeyModifiers::CONTROL)
+            && key.code == KeyCode::Char('f')
+            && self.view_mode == ViewMode::List
+        {
+            self.view_mode = ViewMode::Search;
+            self.search_query.clear();
+            self.search_results.clear();
+            self.search_filtered.clear();
+            self.search_table_state.select(None);
+            self.search_loading = true;
+            self.search_contexts_done = 0;
+            self.entered_from_search = false;
+            return InputAction::StartSearch;
         }
 
         // Filter mode input
