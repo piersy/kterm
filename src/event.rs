@@ -9,6 +9,7 @@ use crate::types::{ResourceItem, ResourceType};
 #[derive(Debug)]
 pub enum AppEvent {
     Key(KeyEvent),
+    #[allow(dead_code)]
     Resize(u16, u16),
     Tick,
     ResourcesUpdated(Vec<ResourceItem>),
@@ -123,6 +124,7 @@ impl EventHandler {
         self.rx.recv().await
     }
 
+    #[allow(dead_code)]
     /// Non-blocking receive. Returns Ok(event) if an event is available,
     /// or Err if the channel is empty.
     pub fn try_recv(&mut self) -> Result<AppEvent, mpsc::error::TryRecvError> {

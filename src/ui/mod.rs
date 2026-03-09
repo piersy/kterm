@@ -48,7 +48,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     let dropdown_height: u16 = if app.dropdown_visible {
         // Show up to 10 items + 2 for border
         let item_count = app.dropdown_filtered.len() as u16;
-        (item_count + 2).min(12).max(3)
+        (item_count + 2).clamp(3, 12)
     } else {
         0
     };
