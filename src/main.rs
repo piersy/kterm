@@ -392,16 +392,54 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                     }
                     InputAction::OpenLogsInLess => {
                         if !app.log_lines.is_empty() {
+                            // Get the K8s client and pod info for live streaming.
+                            // The source depends on whether we entered logs from search.
+                            let client_and_pod = if app.entered_from_search {
+                                if let Some(result) = app.selected_search_result().cloned() {
+                                    let client = k8s::client::K8sManager::client_for_context(
+                                        &result.context,
+                                    )
+                                    .await
+                                    .ok();
+                                    client.map(|c| (c, result.resource.namespace.clone(), result.resource.name.clone()))
+                                } else {
+                                    None
+                                }
+                            } else {
+                                let guard = k8s_manager.lock().await;
+                                guard.as_ref().map(|mgr| {
+                                    (
+                                        mgr.client.clone(),
+                                        app.current_namespace().to_string(),
+                                        app.selected_resource_name().unwrap_or_default(),
+                                    )
+                                })
+                            };
+
                             events.suspend();
                             disable_raw_mode()?;
                             execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
 
-                            let _ = open_logs_in_less(&app.log_lines);
+                            let cleanup = if let Some((client, ns, pod_name)) = client_and_pod {
+                                open_logs_in_less(
+                                    &app.log_lines,
+                                    client,
+                                    ns,
+                                    pod_name,
+                                    None,
+                                ).ok()
+                            } else {
+                                None
+                            };
 
                             enable_raw_mode()?;
                             execute!(terminal.backend_mut(), EnterAlternateScreen)?;
                             terminal.clear()?;
                             events.resume();
+
+                            if let Some(c) = cleanup {
+                                c.finish_in_background();
+                            }
                         }
                     }
                     InputAction::Edit => {
@@ -752,16 +790,107 @@ fn open_logs_in_editor(log_lines: &[String]) -> Result<()> {
     Ok(())
 }
 
-fn open_logs_in_less(log_lines: &[String]) -> Result<()> {
+struct LessCleanup {
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    writer_handle: Option<std::thread::JoinHandle<()>>,
+    path: std::path::PathBuf,
+}
+
+impl LessCleanup {
+    fn finish_in_background(self) {
+        std::thread::spawn(move || {
+            self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+            if let Some(h) = self.writer_handle {
+                let _ = h.join();
+            }
+            let _ = std::fs::remove_file(&self.path);
+        });
+    }
+}
+
+fn open_logs_in_less(
+    log_lines: &[String],
+    client: kube::Client,
+    namespace: String,
+    pod_name: String,
+    container: Option<String>,
+) -> Result<LessCleanup> {
+    use std::io::Write;
+
     let path = write_logs_to_tempfile(log_lines)?;
+
+    // Open the file in append mode for the background writer
+    let mut file = std::fs::OpenOptions::new().append(true).open(&path)?;
+
+    // Spawn a background thread that streams new log lines into the temp file.
+    // We use a std thread with its own tokio runtime because the caller's
+    // async runtime is blocked waiting on the `less` process.
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let stop_flag = stop.clone();
+
+    let writer_handle = std::thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("failed to build tokio runtime for log writer");
+
+        rt.block_on(async {
+            let api: kube::Api<k8s_openapi::api::core::v1::Pod> =
+                kube::Api::namespaced(client, &namespace);
+
+            let mut params = kube::api::LogParams {
+                follow: true,
+                // Start from the latest line to avoid duplicating what's already in the file.
+                // We use since_seconds=1 as a rough "start from now".
+                since_seconds: Some(1),
+                ..Default::default()
+            };
+            if let Some(c) = container {
+                params.container = Some(c);
+            }
+
+            let stream = match api.log_stream(&pod_name, &params).await {
+                Ok(s) => s,
+                Err(_) => return,
+            };
+
+            use futures::TryStreamExt;
+            use futures::AsyncBufReadExt;
+            let mut lines = stream.lines();
+
+            while let Ok(Some(line)) = lines.try_next().await {
+                if stop_flag.load(std::sync::atomic::Ordering::Relaxed) {
+                    break;
+                }
+                if writeln!(file, "{}", line).is_err() {
+                    break;
+                }
+                let _ = file.flush();
+            }
+        });
+    });
+
+    // Ignore SIGINT in kterm so that Ctrl+C (used to exit less follow mode)
+    // doesn't kill our process.
+    unsafe {
+        libc::signal(libc::SIGINT, libc::SIG_IGN);
+    }
 
     std::process::Command::new("less")
         .arg("+F")
         .arg(&path)
         .status()?;
 
-    let _ = std::fs::remove_file(&path);
-    Ok(())
+    // Restore default SIGINT handling
+    unsafe {
+        libc::signal(libc::SIGINT, libc::SIG_DFL);
+    }
+
+    Ok(LessCleanup {
+        stop,
+        writer_handle: Some(writer_handle),
+        path,
+    })
 }
 
 fn edit_yaml_in_editor(yaml: &str) -> Result<Option<String>> {
