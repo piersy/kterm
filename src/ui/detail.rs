@@ -8,7 +8,7 @@ use crate::app::App;
 pub fn render(frame: &mut Frame, app: &App, area: Rect) {
     let title = app
         .selected_resource()
-        .map(|r| format!(" {} ", r.name))
+        .map(|(r, _)| format!(" {} ", r.name))
         .unwrap_or_else(|| " Detail ".to_string());
 
     let block = Block::default()

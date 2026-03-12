@@ -3,7 +3,7 @@ mod tests {
     use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
 
     use crate::app::{App, InputAction};
-    use crate::types::{ConfirmAction, Focus, ResourceItem, ResourceType, ViewMode};
+    use crate::types::{ConfirmAction, Focus, ResourceItem, ResourceType, SelectorTarget, ViewMode};
 
     fn key(code: KeyCode) -> KeyEvent {
         KeyEvent {
@@ -40,18 +40,20 @@ mod tests {
     fn app_with_pods() -> App {
         let mut app = App::new();
         app.focus = Focus::ResourceList;
-        app.resources = vec![
-            fake_pod("pod-0", "Running"),
-            fake_pod("pod-1", "Pending"),
-            fake_pod("pod-2", "Running"),
-        ];
+        app.resources_by_type.insert(
+            ResourceType::Pods,
+            vec![
+                fake_pod("pod-0", "Running"),
+                fake_pod("pod-1", "Pending"),
+                fake_pod("pod-2", "Running"),
+            ],
+        );
         app
     }
 
     #[test]
     fn test_quit_with_q() {
-        let mut app = App::new();
-        app.focus = Focus::ResourceList;
+        let mut app = app_with_pods();
         app.handle_input(key(KeyCode::Char('q')));
         assert!(app.should_quit);
     }
@@ -102,42 +104,30 @@ mod tests {
         assert_eq!(app.table_state.selected(), Some(0));
     }
 
+    // --- Hotkey-based selector navigation (C/N/T) ---
+
     #[test]
-    fn test_tab_cycles_focus() {
-        let mut app = App::new();
-        assert_eq!(app.focus, Focus::ContextSelector);
-
-        // Tab from ContextSelector confirms (no change) and moves to NamespaceSelector
-        app.handle_input(key(KeyCode::Tab));
-        assert_eq!(app.focus, Focus::NamespaceSelector);
-
-        // Tab from NamespaceSelector confirms and moves to ResourceTypeSelector
-        app.handle_input(key(KeyCode::Tab));
-        assert_eq!(app.focus, Focus::ResourceTypeSelector);
-
-        // Tab from ResourceTypeSelector confirms and moves to ResourceList
-        app.handle_input(key(KeyCode::Tab));
-        assert_eq!(app.focus, Focus::ResourceList);
-
-        // Tab from ResourceList enters ContextSelector and opens dropdown
-        app.handle_input(key(KeyCode::Tab));
-        assert_eq!(app.focus, Focus::ContextSelector);
+    fn test_c_opens_context_selector() {
+        let mut app = app_with_pods();
+        app.handle_input(key(KeyCode::Char('c')));
+        assert_eq!(app.focus, Focus::Selector(SelectorTarget::Context));
+        assert!(app.dropdown_visible);
     }
 
     #[test]
-    fn test_backtab_reverse_cycles_focus() {
-        let mut app = App::new();
-        assert_eq!(app.focus, Focus::ContextSelector);
+    fn test_n_opens_namespace_selector() {
+        let mut app = app_with_pods();
+        app.handle_input(key(KeyCode::Char('n')));
+        assert_eq!(app.focus, Focus::Selector(SelectorTarget::Namespace));
+        assert!(app.dropdown_visible);
+    }
 
-        // BackTab from ContextSelector goes to ResourceList
-        app.handle_input(key(KeyCode::BackTab));
-        assert_eq!(app.focus, Focus::ResourceList);
-
-        app.handle_input(key(KeyCode::BackTab));
-        assert_eq!(app.focus, Focus::ResourceTypeSelector);
-
-        app.handle_input(key(KeyCode::BackTab));
-        assert_eq!(app.focus, Focus::NamespaceSelector);
+    #[test]
+    fn test_t_opens_type_selector() {
+        let mut app = app_with_pods();
+        app.handle_input(key(KeyCode::Char('t')));
+        assert_eq!(app.focus, Focus::Selector(SelectorTarget::ResourceType));
+        assert!(app.dropdown_visible);
     }
 
     #[test]
@@ -148,25 +138,25 @@ mod tests {
             "ctx-2".to_string(),
             "ctx-3".to_string(),
         ];
-        app.selected_context = 0;
-        app.focus = Focus::ContextSelector;
-        app.dropdown_open();
+        app.selected_contexts.clear();
+        app.selected_contexts.insert(0);
+        app.focus = Focus::ResourceList;
 
-        // All 3 items should be in filtered list
+        // Open context selector
+        app.handle_input(key(KeyCode::Char('c')));
+        assert_eq!(app.focus, Focus::Selector(SelectorTarget::Context));
+        assert!(app.dropdown_visible);
         assert_eq!(app.dropdown_filtered.len(), 3);
-        assert_eq!(app.dropdown_selected, 0);
-        assert!(app.dropdown_visible);
 
-        // Arrow down opens dropdown and selects ctx-2
+        // Arrow down to select ctx-2
         app.handle_input(key(KeyCode::Down));
-        assert!(app.dropdown_visible);
         assert_eq!(app.dropdown_selected, 1);
 
-        // Enter to confirm ctx-2
+        // Enter to confirm
         let action = app.handle_input(key(KeyCode::Enter));
         assert_eq!(action, InputAction::ContextChanged);
-        assert_eq!(app.selected_context, 1);
-        assert_eq!(app.focus, Focus::NamespaceSelector);
+        assert!(app.selected_contexts.contains(&1));
+        assert_eq!(app.focus, Focus::ResourceList);
     }
 
     #[test]
@@ -177,13 +167,15 @@ mod tests {
             "gke-staging".to_string(),
             "minikube".to_string(),
         ];
-        app.selected_context = 0;
-        app.focus = Focus::ContextSelector;
-        app.dropdown_open();
+        app.selected_contexts.clear();
+        app.selected_contexts.insert(0);
+        app.focus = Focus::ResourceList;
 
-        // Type "mini" to filter (typing opens dropdown)
+        // Open context selector
+        app.handle_input(key(KeyCode::Char('c')));
+
+        // Type "mini" to filter
         app.handle_input(key(KeyCode::Char('m')));
-        assert!(app.dropdown_visible);
         app.handle_input(key(KeyCode::Char('i')));
         app.handle_input(key(KeyCode::Char('n')));
         app.handle_input(key(KeyCode::Char('i')));
@@ -193,90 +185,75 @@ mod tests {
         // Enter to select minikube (index 2 in original list)
         let action = app.handle_input(key(KeyCode::Enter));
         assert_eq!(action, InputAction::ContextChanged);
-        assert_eq!(app.selected_context, 2);
+        assert!(app.selected_contexts.contains(&2));
     }
 
     #[test]
     fn test_namespace_selector_dropdown() {
         let mut app = App::new();
-        app.namespaces = vec![
-            "default".to_string(),
-            "kube-system".to_string(),
-        ];
-        app.selected_namespace = 0;
-        app.focus = Focus::NamespaceSelector;
-        app.dropdown_open();
+        app.namespaces = vec!["default".to_string(), "kube-system".to_string()];
+        app.selected_namespaces.clear();
+        app.selected_namespaces.insert(0);
+        app.focus = Focus::ResourceList;
 
-        // Navigate to kube-system (Down opens dropdown) and select
+        // Open namespace selector
+        app.handle_input(key(KeyCode::Char('n')));
+
+        // Navigate to kube-system and select
         app.handle_input(key(KeyCode::Down));
         let action = app.handle_input(key(KeyCode::Enter));
         assert_eq!(action, InputAction::NamespaceChanged);
-        assert_eq!(app.selected_namespace, 1);
-        assert_eq!(app.focus, Focus::ResourceTypeSelector);
+        assert!(app.selected_namespaces.contains(&1));
+        assert_eq!(app.focus, Focus::ResourceList);
     }
 
     #[test]
     fn test_resource_type_selector_dropdown() {
         let mut app = App::new();
-        app.focus = Focus::ResourceTypeSelector;
-        app.dropdown_open();
-        assert_eq!(app.resource_type, ResourceType::Pods);
+        app.focus = Focus::ResourceList;
+        assert_eq!(app.selected_resource_types, vec![ResourceType::Pods]);
 
-        // Navigate down to Deployments (index 1) and select
+        // Open type selector
+        app.handle_input(key(KeyCode::Char('t')));
+
+        // Pods is pre-toggled. Un-toggle it with Space.
+        app.handle_input(key(KeyCode::Char(' ')));
+
+        // Navigate down to Deployments (index 1) and select with Enter
         app.handle_input(key(KeyCode::Down));
         let action = app.handle_input(key(KeyCode::Enter));
         assert_eq!(action, InputAction::ResourceTypeChanged);
-        assert_eq!(app.resource_type, ResourceType::Deployments);
+        assert_eq!(app.selected_resource_types, vec![ResourceType::Deployments]);
         assert_eq!(app.focus, Focus::ResourceList);
     }
 
     #[test]
-    fn test_selector_esc_closes_dropdown_first() {
+    fn test_selector_esc_closes_and_returns_to_list() {
         let mut app = App::new();
         app.contexts = vec!["ctx-1".to_string(), "ctx-2".to_string()];
-        app.focus = Focus::ContextSelector;
-        app.dropdown_open();
+        app.focus = Focus::ResourceList;
 
-        // Type to open dropdown
+        // Open context selector
         app.handle_input(key(KeyCode::Char('c')));
         assert!(app.dropdown_visible);
+        assert_eq!(app.focus, Focus::Selector(SelectorTarget::Context));
 
-        // First Esc closes the dropdown but stays on selector
+        // Esc closes and returns to resource list directly
         app.handle_input(key(KeyCode::Esc));
         assert!(!app.dropdown_visible);
-        assert_eq!(app.focus, Focus::ContextSelector);
-
-        // Second Esc leaves selector to resource list
-        app.handle_input(key(KeyCode::Esc));
         assert_eq!(app.focus, Focus::ResourceList);
     }
 
     #[test]
-    fn test_selector_typing_opens_dropdown() {
+    fn test_selector_typing_filters() {
         let mut app = App::new();
         app.contexts = vec!["ctx-1".to_string(), "ctx-2".to_string()];
-        app.focus = Focus::ContextSelector;
-        app.dropdown_open();
-        assert!(app.dropdown_visible);
+        app.focus = Focus::ResourceList;
 
-        // Typing a character opens the dropdown
         app.handle_input(key(KeyCode::Char('c')));
-        assert!(app.dropdown_visible);
-        assert_eq!(app.dropdown_query, "c");
-    }
-
-    #[test]
-    fn test_selector_arrows_open_dropdown() {
-        let mut app = App::new();
-        app.contexts = vec!["ctx-1".to_string(), "ctx-2".to_string()];
-        app.focus = Focus::ContextSelector;
-        app.dropdown_open();
-        assert!(app.dropdown_visible);
-
-        // Down arrow opens the dropdown
-        app.handle_input(key(KeyCode::Down));
-        assert!(app.dropdown_visible);
-        assert_eq!(app.dropdown_selected, 1);
+        app.handle_input(key(KeyCode::Char('1')));
+        assert_eq!(app.dropdown_query, "1");
+        assert_eq!(app.dropdown_filtered.len(), 1);
     }
 
     #[test]
@@ -287,90 +264,81 @@ mod tests {
             "gke-staging".to_string(),
             "minikube".to_string(),
         ];
-        app.focus = Focus::ContextSelector;
-        app.dropdown_open();
+        app.focus = Focus::ResourceList;
 
+        app.handle_input(key(KeyCode::Char('c')));
         app.handle_input(key(KeyCode::Char('g')));
         app.handle_input(key(KeyCode::Char('k')));
         assert_eq!(app.dropdown_query, "gk");
-        assert_eq!(app.dropdown_filtered.len(), 2); // gke-prod and gke-staging
+        assert_eq!(app.dropdown_filtered.len(), 2);
 
         app.handle_input(key(KeyCode::Backspace));
         assert_eq!(app.dropdown_query, "g");
-        assert_eq!(app.dropdown_filtered.len(), 2); // still gke-prod and gke-staging
 
         app.handle_input(key(KeyCode::Backspace));
         assert_eq!(app.dropdown_query, "");
-        assert_eq!(app.dropdown_filtered.len(), 3); // all items shown again
+        assert_eq!(app.dropdown_filtered.len(), 3);
     }
 
-    #[test]
-    fn test_tab_moves_focus_without_changing_selection() {
-        let mut app = App::new();
-        app.contexts = vec!["ctx-1".to_string(), "ctx-2".to_string()];
-        app.selected_context = 0;
-        app.focus = Focus::ContextSelector;
-        app.dropdown_open();
+    // --- Multi-selection with Space ---
 
-        // Open dropdown and navigate to ctx-2
+    #[test]
+    fn test_space_toggles_selection() {
+        let mut app = App::new();
+        app.focus = Focus::ResourceList;
+
+        // Open type selector
+        app.handle_input(key(KeyCode::Char('t')));
+
+        // Space toggles current item (index 0 = Pods, already toggled from pre-population)
+        // Move down to Deployments
         app.handle_input(key(KeyCode::Down));
-        assert!(app.dropdown_visible);
-        assert_eq!(app.dropdown_selected, 1);
+        // Toggle Deployments with Space
+        app.handle_input(key(KeyCode::Char(' ')));
+        assert!(app.dropdown_toggled.contains(&1));
 
-        // Tab should move focus WITHOUT confirming ctx-2
-        let action = app.handle_input(key(KeyCode::Tab));
-        assert_eq!(action, InputAction::None);
-        assert_eq!(app.selected_context, 0); // unchanged!
-        assert_eq!(app.focus, Focus::NamespaceSelector);
-    }
-
-    #[test]
-    fn test_enter_confirms_dropdown_selection() {
-        let mut app = App::new();
-        app.contexts = vec!["ctx-1".to_string(), "ctx-2".to_string()];
-        app.selected_context = 0;
-        app.focus = Focus::ContextSelector;
-        app.dropdown_open();
-
-        // Open dropdown and navigate to ctx-2
+        // Move down to StatefulSets
         app.handle_input(key(KeyCode::Down));
-        assert!(app.dropdown_visible);
+        // Toggle StatefulSets
+        app.handle_input(key(KeyCode::Char(' ')));
+        assert!(app.dropdown_toggled.contains(&2));
 
-        // Enter confirms the selection
+        // Enter confirms: should have Pods (pre-toggled) + Deployments + StatefulSets + current (StatefulSets, already toggled)
         let action = app.handle_input(key(KeyCode::Enter));
-        assert_eq!(action, InputAction::ContextChanged);
-        assert_eq!(app.selected_context, 1);
-        assert_eq!(app.focus, Focus::NamespaceSelector);
+        assert_eq!(action, InputAction::ResourceTypeChanged);
+        assert!(app.selected_resource_types.contains(&ResourceType::Pods));
+        assert!(app.selected_resource_types.contains(&ResourceType::Deployments));
+        assert!(app.selected_resource_types.contains(&ResourceType::StatefulSets));
     }
 
     #[test]
-    fn test_enter_without_dropdown_advances_focus() {
+    fn test_space_untoggle() {
         let mut app = App::new();
-        app.contexts = vec!["ctx-1".to_string(), "ctx-2".to_string()];
-        app.selected_context = 0;
-        app.focus = Focus::ContextSelector;
-        // Close dropdown to test behavior when dropdown is not visible
-        app.dropdown_visible = false;
-        assert!(!app.dropdown_visible);
+        app.focus = Focus::ResourceList;
 
-        // Enter without dropdown visible just advances focus (no change)
+        // Open type selector - Pods is pre-toggled
+        app.handle_input(key(KeyCode::Char('t')));
+        assert!(app.dropdown_toggled.contains(&0)); // Pods is pre-toggled
+
+        // Space on Pods untoggle it
+        app.handle_input(key(KeyCode::Char(' ')));
+        assert!(!app.dropdown_toggled.contains(&0));
+
+        // Move to Deployments and confirm (only Deployments)
+        app.handle_input(key(KeyCode::Down));
         let action = app.handle_input(key(KeyCode::Enter));
-        assert_eq!(action, InputAction::None);
-        assert_eq!(app.selected_context, 0); // unchanged
-        assert_eq!(app.focus, Focus::NamespaceSelector);
+        assert_eq!(action, InputAction::ResourceTypeChanged);
+        assert_eq!(app.selected_resource_types, vec![ResourceType::Deployments]);
     }
 
     #[test]
     fn test_dropdown_navigate_wraps() {
         let mut app = App::new();
-        app.contexts = vec![
-            "ctx-1".to_string(),
-            "ctx-2".to_string(),
-        ];
-        app.focus = Focus::ContextSelector;
-        app.dropdown_open();
+        app.contexts = vec!["ctx-1".to_string(), "ctx-2".to_string()];
+        app.focus = Focus::ResourceList;
 
-        // Down opens and moves to index 1
+        app.handle_input(key(KeyCode::Char('c')));
+
         app.handle_input(key(KeyCode::Down));
         assert_eq!(app.dropdown_selected, 1);
 
@@ -394,6 +362,7 @@ mod tests {
     #[test]
     fn test_enter_on_empty_list_does_nothing() {
         let mut app = App::new();
+        app.focus = Focus::ResourceList;
         let action = app.handle_input(key(KeyCode::Enter));
         assert_eq!(action, InputAction::None);
         assert_eq!(app.view_mode, ViewMode::List);
@@ -422,15 +391,12 @@ mod tests {
         app.handle_input(key(KeyCode::Char('k')));
         assert_eq!(app.detail_scroll, 0);
 
-        // Can't scroll past 0
         app.handle_input(key(KeyCode::Char('k')));
         assert_eq!(app.detail_scroll, 0);
 
-        // Jump to bottom
         app.handle_input(key(KeyCode::Char('G')));
         assert!(app.detail_scroll > 0);
 
-        // Jump to top
         app.handle_input(key(KeyCode::Char('g')));
         assert_eq!(app.detail_scroll, 0);
     }
@@ -446,8 +412,20 @@ mod tests {
 
     #[test]
     fn test_logs_not_available_for_pvcs() {
-        let mut app = app_with_pods();
-        app.resource_type = ResourceType::PersistentVolumeClaims;
+        let mut app = App::new();
+        app.focus = Focus::ResourceList;
+        app.selected_resource_types = vec![ResourceType::PersistentVolumeClaims];
+        app.resources_by_type.insert(
+            ResourceType::PersistentVolumeClaims,
+            vec![ResourceItem {
+                name: "my-pvc".to_string(),
+                namespace: "default".to_string(),
+                status: "Bound".to_string(),
+                age: "1d".to_string(),
+                extra: vec![],
+                raw_yaml: String::new(),
+            }],
+        );
         let action = app.handle_input(key(KeyCode::Char('l')));
         assert_eq!(action, InputAction::None);
         assert_eq!(app.view_mode, ViewMode::List);
@@ -480,12 +458,10 @@ mod tests {
     fn test_delete_confirm_flow() {
         let mut app = app_with_pods();
 
-        // Press d -> should open confirm
         let action = app.handle_input(key(KeyCode::Char('d')));
         assert_eq!(action, InputAction::None);
         assert_eq!(app.view_mode, ViewMode::Confirm(ConfirmAction::Delete));
 
-        // Press y -> confirm
         let action = app.handle_input(key(KeyCode::Char('y')));
         assert_eq!(action, InputAction::Delete);
         assert_eq!(app.view_mode, ViewMode::List);
@@ -498,7 +474,6 @@ mod tests {
         app.handle_input(key(KeyCode::Char('d')));
         assert_eq!(app.view_mode, ViewMode::Confirm(ConfirmAction::Delete));
 
-        // Press n -> cancel
         let action = app.handle_input(key(KeyCode::Char('n')));
         assert_eq!(action, InputAction::None);
         assert_eq!(app.view_mode, ViewMode::List);
@@ -527,22 +502,18 @@ mod tests {
     fn test_filter_mode() {
         let mut app = app_with_pods();
 
-        // Enter filter mode
         app.handle_input(key(KeyCode::Char('/')));
         assert!(app.filter_active);
         assert!(app.filter.is_empty());
 
-        // Type filter text
         app.handle_input(key(KeyCode::Char('p')));
         app.handle_input(key(KeyCode::Char('o')));
         app.handle_input(key(KeyCode::Char('d')));
         assert_eq!(app.filter, "pod");
 
-        // Backspace
         app.handle_input(key(KeyCode::Backspace));
         assert_eq!(app.filter, "po");
 
-        // Apply filter with enter
         app.handle_input(key(KeyCode::Enter));
         assert!(!app.filter_active);
         assert_eq!(app.filter, "po");
@@ -558,31 +529,16 @@ mod tests {
     }
 
     #[test]
-    fn test_filtered_resources() {
-        let mut app = app_with_pods();
-        assert_eq!(app.filtered_resources().len(), 3);
-
-        app.filter = "pod-0".to_string();
-        assert_eq!(app.filtered_resources().len(), 1);
-        assert_eq!(app.filtered_resources()[0].name, "pod-0");
-
-        app.filter = "nonexistent".to_string();
-        assert_eq!(app.filtered_resources().len(), 0);
-    }
-
-    #[test]
     fn test_error_auto_dismiss() {
         let mut app = App::new();
         app.set_error("test error".to_string());
         assert!(app.error_message.is_some());
 
-        // Tick 20 times (should not dismiss yet)
         for _ in 0..20 {
             app.handle_tick();
         }
         assert!(app.error_message.is_some());
 
-        // One more tick should dismiss
         app.handle_tick();
         assert!(app.error_message.is_none());
     }
@@ -593,17 +549,6 @@ mod tests {
         assert_eq!(ResourceType::ALL[0], ResourceType::Pods);
         assert_eq!(ResourceType::ALL[1], ResourceType::Deployments);
         assert_eq!(ResourceType::ALL[2], ResourceType::StatefulSets);
-    }
-
-    #[test]
-    fn test_focus_cycling() {
-        assert_eq!(Focus::ResourceList.next(), Focus::ContextSelector);
-        assert_eq!(Focus::ContextSelector.next(), Focus::NamespaceSelector);
-        assert_eq!(Focus::NamespaceSelector.next(), Focus::ResourceTypeSelector);
-        assert_eq!(Focus::ResourceTypeSelector.next(), Focus::ResourceList);
-
-        assert_eq!(Focus::ResourceList.prev(), Focus::ResourceTypeSelector);
-        assert_eq!(Focus::ContextSelector.prev(), Focus::ResourceList);
     }
 
     #[test]
@@ -659,17 +604,14 @@ mod tests {
         let mut app = app_with_pods();
         app.view_mode = ViewMode::Detail;
 
-        // Delete from detail
         app.handle_input(key(KeyCode::Char('d')));
         assert_eq!(app.view_mode, ViewMode::Confirm(ConfirmAction::Delete));
         app.view_mode = ViewMode::Detail;
 
-        // Restart from detail
         app.handle_input(key(KeyCode::Char('r')));
         assert_eq!(app.view_mode, ViewMode::Confirm(ConfirmAction::Restart));
         app.view_mode = ViewMode::Detail;
 
-        // Logs from detail
         let action = app.handle_input(key(KeyCode::Char('l')));
         assert_eq!(action, InputAction::StreamLogs);
         assert_eq!(app.view_mode, ViewMode::Logs);
@@ -679,7 +621,6 @@ mod tests {
     fn test_navigate_empty_list() {
         let mut app = App::new();
         app.focus = Focus::ResourceList;
-        // Should not panic on empty list
         app.handle_input(key(KeyCode::Char('j')));
         app.handle_input(key(KeyCode::Char('k')));
         assert_eq!(app.table_state.selected(), Some(0));
@@ -723,9 +664,19 @@ mod tests {
         app.search_results = vec![
             fake_search_result("op-geth-node-0", "ethereum", "gke-prod", ResourceType::Pods),
             fake_search_result("op-geth-node-1", "ethereum", "gke-prod", ResourceType::Pods),
-            fake_search_result("op-geth-node-0", "ethereum", "gke-staging", ResourceType::Pods),
+            fake_search_result(
+                "op-geth-node-0",
+                "ethereum",
+                "gke-staging",
+                ResourceType::Pods,
+            ),
             fake_search_result("redis-master-0", "cache", "gke-prod", ResourceType::Pods),
-            fake_search_result("nginx-ingress", "default", "gke-prod", ResourceType::StatefulSets),
+            fake_search_result(
+                "nginx-ingress",
+                "default",
+                "gke-prod",
+                ResourceType::StatefulSets,
+            ),
         ];
         app.update_search_filter();
         app
@@ -790,15 +741,12 @@ mod tests {
     fn test_search_filter_narrows_results() {
         let mut app = app_with_search_results();
 
-        // Empty query shows all results
         assert_eq!(app.search_filtered.len(), 5);
 
-        // Type "op-geth" to narrow down
         app.search_query = "op-geth".to_string();
         app.update_search_filter();
         assert_eq!(app.search_filtered.len(), 3);
 
-        // Type "redis" to switch
         app.search_query = "redis".to_string();
         app.update_search_filter();
         assert_eq!(app.search_filtered.len(), 1);
@@ -833,11 +781,9 @@ mod tests {
     #[test]
     fn test_search_navigate_wraps() {
         let mut app = app_with_search_results();
-        // 5 results, go up from 0 wraps to 4
         app.handle_input(key(KeyCode::Up));
         assert_eq!(app.search_table_state.selected(), Some(4));
 
-        // Go down from 4 wraps to 0
         app.handle_input(key(KeyCode::Down));
         assert_eq!(app.search_table_state.selected(), Some(0));
     }
@@ -944,32 +890,21 @@ mod tests {
         app.search_query = "op-geth-node-0".to_string();
         app.update_search_filter();
 
-        // Should find 2 results (one per cluster)
         assert_eq!(app.search_filtered.len(), 2);
 
         let r0 = &app.search_results[app.search_filtered[0]];
         let r1 = &app.search_results[app.search_filtered[1]];
         assert_eq!(r0.resource.name, "op-geth-node-0");
         assert_eq!(r1.resource.name, "op-geth-node-0");
-        // Different clusters
         assert_ne!(r0.context, r1.context);
     }
 
     #[test]
     fn test_fuzzy_match_basic() {
-        // Exact match
         assert!(fuzzy_match("pod", "pod").is_some());
-
-        // Substring
         assert!(fuzzy_match("pod", "my-pod-0").is_some());
-
-        // Subsequence
         assert!(fuzzy_match("ogn0", "op-geth-node-0").is_some());
-
-        // No match
         assert!(fuzzy_match("xyz", "pod").is_none());
-
-        // Empty query matches everything
         assert!(fuzzy_match("", "anything").is_some());
     }
 
@@ -983,7 +918,6 @@ mod tests {
     fn test_fuzzy_match_scoring_prefers_exact() {
         let exact_score = fuzzy_match("pod", "pod").unwrap();
         let partial_score = fuzzy_match("pod", "my-pod-long-name").unwrap();
-        // Exact/shorter match should score higher (shorter target bonus)
         assert!(exact_score > partial_score);
     }
 
@@ -992,12 +926,10 @@ mod tests {
         let mut app = app_with_pods();
         app.contexts = vec!["ctx-1".to_string()];
 
-        // Enter search
         let action = app.handle_input(key_with_mod(KeyCode::Char('f'), KeyModifiers::CONTROL));
         assert_eq!(action, InputAction::StartSearch);
         assert_eq!(app.view_mode, ViewMode::Search);
 
-        // Simulate results arriving
         app.search_results = vec![
             fake_search_result("op-geth-node-0", "eth", "ctx-1", ResourceType::Pods),
             fake_search_result("redis-0", "cache", "ctx-1", ResourceType::Pods),
@@ -1005,23 +937,90 @@ mod tests {
         app.update_search_filter();
         assert_eq!(app.search_filtered.len(), 2);
 
-        // Type search query
         app.handle_input(key(KeyCode::Char('o')));
         app.handle_input(key(KeyCode::Char('p')));
         assert_eq!(app.search_filtered.len(), 1);
 
-        // Enter detail
         let action = app.handle_input(key(KeyCode::Enter));
         assert_eq!(action, InputAction::SearchDescribe);
         assert_eq!(app.view_mode, ViewMode::Detail);
         assert!(app.entered_from_search);
 
-        // Go back to search
         app.handle_input(key(KeyCode::Esc));
         assert_eq!(app.view_mode, ViewMode::Search);
 
-        // Exit search
         app.handle_input(key(KeyCode::Esc));
         assert_eq!(app.view_mode, ViewMode::List);
+    }
+
+    // --- Multi-type display tests ---
+
+    #[test]
+    fn test_display_rows_single_type() {
+        let mut app = app_with_pods();
+        let rows = app.display_rows();
+        // Single type: no dividers, just resource rows
+        assert_eq!(rows.len(), 3);
+        assert!(matches!(rows[0], crate::app::DisplayRow::Resource { .. }));
+    }
+
+    #[test]
+    fn test_display_rows_multi_type() {
+        let mut app = App::new();
+        app.selected_resource_types = vec![ResourceType::Pods, ResourceType::Services];
+        app.resources_by_type.insert(
+            ResourceType::Pods,
+            vec![fake_pod("pod-0", "Running")],
+        );
+        app.resources_by_type.insert(
+            ResourceType::Services,
+            vec![ResourceItem {
+                name: "svc-0".to_string(),
+                namespace: "default".to_string(),
+                status: "Active".to_string(),
+                age: "1d".to_string(),
+                extra: vec![],
+                raw_yaml: String::new(),
+            }],
+        );
+        let rows = app.display_rows();
+        // 2 dividers + 2 resources = 4 rows
+        assert_eq!(rows.len(), 4);
+        assert!(matches!(rows[0], crate::app::DisplayRow::TypeDivider(ResourceType::Pods)));
+        assert!(matches!(rows[1], crate::app::DisplayRow::Resource { resource_type: ResourceType::Pods, .. }));
+        assert!(matches!(rows[2], crate::app::DisplayRow::TypeDivider(ResourceType::Services)));
+        assert!(matches!(rows[3], crate::app::DisplayRow::Resource { resource_type: ResourceType::Services, .. }));
+    }
+
+    #[test]
+    fn test_navigation_skips_dividers() {
+        let mut app = App::new();
+        app.focus = Focus::ResourceList;
+        app.selected_resource_types = vec![ResourceType::Pods, ResourceType::Services];
+        app.resources_by_type.insert(
+            ResourceType::Pods,
+            vec![fake_pod("pod-0", "Running")],
+        );
+        app.resources_by_type.insert(
+            ResourceType::Services,
+            vec![ResourceItem {
+                name: "svc-0".to_string(),
+                namespace: "default".to_string(),
+                status: "Active".to_string(),
+                age: "1d".to_string(),
+                extra: vec![],
+                raw_yaml: String::new(),
+            }],
+        );
+
+        // Start at row 0 (Pods divider) - navigate should skip to first resource
+        app.table_state.select(Some(0));
+        app.handle_input(key(KeyCode::Char('j')));
+        // Should be on pod-0 (index 1)
+        assert_eq!(app.table_state.selected(), Some(1));
+
+        // Navigate down again - should skip Services divider to svc-0
+        app.handle_input(key(KeyCode::Char('j')));
+        assert_eq!(app.table_state.selected(), Some(3));
     }
 }

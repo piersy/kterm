@@ -1,21 +1,55 @@
-use ratatui::layout::Rect;
+use ratatui::layout::{Constraint, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::widgets::{Block, Borders, Cell, Row, Table};
 use ratatui::Frame;
 
-use crate::app::App;
+use crate::app::{App, DisplayRow};
+use crate::types::ResourceType;
 
 pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
-    let resource_type = app.resource_type;
+    let display_rows = app.display_rows();
+    let multi_type = app.selected_resource_types.len() > 1;
+
+    if !multi_type {
+        // Single type: use original table rendering
+        render_single_type(frame, app, area);
+    } else {
+        // Multi-type: render with divider lines
+        render_multi_type(frame, app, area, &display_rows);
+    }
+}
+
+fn render_single_type(frame: &mut Frame, app: &mut App, area: Rect) {
+    let resource_type = app.primary_resource_type();
     let headers = resource_type.column_headers();
 
     let header_cells: Vec<Cell> = headers
         .iter()
-        .map(|h| Cell::from(*h).style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)))
+        .map(|h| {
+            Cell::from(*h).style(
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            )
+        })
         .collect();
     let header_row = Row::new(header_cells).height(1);
 
-    let filtered = app.filtered_resources();
+    let items = app
+        .resources_by_type
+        .get(&resource_type)
+        .cloned()
+        .unwrap_or_default();
+    let filtered: Vec<_> = if app.filter.is_empty() {
+        items.iter().collect()
+    } else {
+        let filter_lower = app.filter.to_lowercase();
+        items
+            .iter()
+            .filter(|r| r.name.to_lowercase().contains(&filter_lower))
+            .collect()
+    };
+
     let rows: Vec<Row> = filtered
         .iter()
         .map(|item| {
@@ -48,11 +82,7 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
         .bg(Color::DarkGray)
         .add_modifier(Modifier::BOLD);
 
-    let border_style = if app.focus == crate::types::Focus::ResourceList {
-        Style::default().fg(Color::Cyan)
-    } else {
-        Style::default().fg(Color::DarkGray)
-    };
+    let border_style = Style::default().fg(Color::Cyan);
 
     let table = Table::new(rows, &widths)
         .header(header_row)
@@ -63,17 +93,105 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
                 .border_style(border_style),
         )
         .row_highlight_style(highlight_style)
-        .highlight_symbol("▶ ");
+        .highlight_symbol("\u{25b6} ");
 
     frame.render_stateful_widget(table, area, &mut app.table_state);
 }
 
-fn column_widths(resource_type: crate::types::ResourceType) -> Vec<ratatui::layout::Constraint> {
-    use crate::types::ResourceType;
-    use ratatui::layout::Constraint;
+fn render_multi_type(frame: &mut Frame, app: &mut App, area: Rect, display_rows: &[DisplayRow]) {
+    // For multi-type display, we use a single table with variable-width columns.
+    // Divider rows span the full width. Resource rows use a generic column layout.
+    // We use a NAME + STATUS + AGE layout for mixed types.
+    let generic_headers = vec!["TYPE", "NAME", "STATUS", "AGE"];
+    let header_cells: Vec<Cell> = generic_headers
+        .iter()
+        .map(|h| {
+            Cell::from(*h).style(
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            )
+        })
+        .collect();
+    let header_row = Row::new(header_cells).height(1);
 
+    let rows: Vec<Row> = display_rows
+        .iter()
+        .map(|row| match row {
+            DisplayRow::TypeDivider(rt) => {
+                // Create a divider row with the type name
+                let divider_text = format!("\u{2500}\u{2500} {} \u{2500}\u{2500}", rt);
+                let cell = Cell::from(divider_text).style(
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                );
+                Row::new(vec![cell, Cell::from(""), Cell::from(""), Cell::from("")])
+                    .height(1)
+                    .style(Style::default().fg(Color::DarkGray))
+            }
+            DisplayRow::Resource {
+                resource_type,
+                index,
+            } => {
+                let items = app.resources_by_type.get(resource_type);
+                if let Some(item) = items.and_then(|v| v.get(*index)) {
+                    let cells = vec![
+                        Cell::from(resource_type.to_string())
+                            .style(Style::default().fg(Color::DarkGray)),
+                        Cell::from(item.name.clone()),
+                        Cell::from(item.status.clone()).style(status_style(&item.status)),
+                        Cell::from(item.age.clone()),
+                    ];
+                    Row::new(cells).height(1)
+                } else {
+                    Row::new(vec![Cell::from("?")]).height(1)
+                }
+            }
+        })
+        .collect();
+
+    let widths = vec![
+        Constraint::Percentage(15),
+        Constraint::Percentage(35),
+        Constraint::Percentage(25),
+        Constraint::Percentage(25),
+    ];
+
+    let types_display: String = app
+        .selected_resource_types
+        .iter()
+        .map(|t| t.to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let title = if app.filter.is_empty() {
+        format!(" {} ", types_display)
+    } else {
+        format!(" {} [filter: {}] ", types_display, app.filter)
+    };
+
+    let highlight_style = Style::default()
+        .bg(Color::DarkGray)
+        .add_modifier(Modifier::BOLD);
+
+    let border_style = Style::default().fg(Color::Cyan);
+
+    let table = Table::new(rows, &widths)
+        .header(header_row)
+        .block(
+            Block::default()
+                .title(title)
+                .borders(Borders::ALL)
+                .border_style(border_style),
+        )
+        .row_highlight_style(highlight_style)
+        .highlight_symbol("\u{25b6} ");
+
+    frame.render_stateful_widget(table, area, &mut app.table_state);
+}
+
+fn column_widths(resource_type: ResourceType) -> Vec<Constraint> {
     match resource_type {
-        // 5 columns: NAME, STATUS, AGE, RESTARTS, NODE
         ResourceType::Pods => vec![
             Constraint::Percentage(30),
             Constraint::Percentage(15),
@@ -81,7 +199,6 @@ fn column_widths(resource_type: crate::types::ResourceType) -> Vec<ratatui::layo
             Constraint::Percentage(15),
             Constraint::Percentage(25),
         ],
-        // 5 columns: NAME, READY, UP-TO-DATE, AVAILABLE, AGE
         ResourceType::Deployments => vec![
             Constraint::Percentage(30),
             Constraint::Percentage(15),
@@ -89,27 +206,25 @@ fn column_widths(resource_type: crate::types::ResourceType) -> Vec<ratatui::layo
             Constraint::Percentage(20),
             Constraint::Percentage(15),
         ],
-        // 3 columns: NAME, READY, AGE
         ResourceType::StatefulSets => vec![
             Constraint::Percentage(40),
             Constraint::Percentage(30),
             Constraint::Percentage(30),
         ],
-        // 5 columns: NAME, DESIRED, CURRENT, READY, AGE
-        ResourceType::DaemonSets | ResourceType::ReplicaSets | ResourceType::ReplicationControllers => vec![
+        ResourceType::DaemonSets
+        | ResourceType::ReplicaSets
+        | ResourceType::ReplicationControllers => vec![
             Constraint::Percentage(30),
             Constraint::Percentage(15),
             Constraint::Percentage(15),
             Constraint::Percentage(15),
             Constraint::Percentage(25),
         ],
-        // 3 columns: NAME, COMPLETIONS, AGE
         ResourceType::Jobs => vec![
             Constraint::Percentage(40),
             Constraint::Percentage(30),
             Constraint::Percentage(30),
         ],
-        // 5 columns: NAME, SCHEDULE, SUSPEND, ACTIVE, AGE
         ResourceType::CronJobs => vec![
             Constraint::Percentage(25),
             Constraint::Percentage(25),
@@ -117,7 +232,6 @@ fn column_widths(resource_type: crate::types::ResourceType) -> Vec<ratatui::layo
             Constraint::Percentage(15),
             Constraint::Percentage(20),
         ],
-        // 5 columns: NAME, MINPODS, MAXPODS, REPLICAS, AGE
         ResourceType::HorizontalPodAutoscalers => vec![
             Constraint::Percentage(30),
             Constraint::Percentage(15),
@@ -125,7 +239,6 @@ fn column_widths(resource_type: crate::types::ResourceType) -> Vec<ratatui::layo
             Constraint::Percentage(15),
             Constraint::Percentage(25),
         ],
-        // 5 columns: NAME, TYPE, CLUSTER-IP, PORTS, AGE
         ResourceType::Services => vec![
             Constraint::Percentage(25),
             Constraint::Percentage(15),
@@ -133,39 +246,33 @@ fn column_widths(resource_type: crate::types::ResourceType) -> Vec<ratatui::layo
             Constraint::Percentage(25),
             Constraint::Percentage(15),
         ],
-        // 3 columns: NAME, ENDPOINTS, AGE
         ResourceType::Endpoints => vec![
             Constraint::Percentage(30),
             Constraint::Percentage(50),
             Constraint::Percentage(20),
         ],
-        // 4 columns: NAME, CLASS, HOSTS, AGE
         ResourceType::Ingresses => vec![
             Constraint::Percentage(25),
             Constraint::Percentage(20),
             Constraint::Percentage(35),
             Constraint::Percentage(20),
         ],
-        // 3 columns: NAME, POD-SELECTOR, AGE
         ResourceType::NetworkPolicies => vec![
             Constraint::Percentage(30),
             Constraint::Percentage(50),
             Constraint::Percentage(20),
         ],
-        // 3 columns: NAME, DATA, AGE
         ResourceType::ConfigMaps => vec![
             Constraint::Percentage(50),
             Constraint::Percentage(20),
             Constraint::Percentage(30),
         ],
-        // 4 columns: NAME, TYPE, DATA, AGE
         ResourceType::Secrets => vec![
             Constraint::Percentage(30),
             Constraint::Percentage(30),
             Constraint::Percentage(15),
             Constraint::Percentage(25),
         ],
-        // 5 columns: NAME, STATUS, VOLUME, CAPACITY, AGE
         ResourceType::PersistentVolumeClaims => vec![
             Constraint::Percentage(25),
             Constraint::Percentage(15),
@@ -173,7 +280,6 @@ fn column_widths(resource_type: crate::types::ResourceType) -> Vec<ratatui::layo
             Constraint::Percentage(15),
             Constraint::Percentage(20),
         ],
-        // 5 columns: NAME, CAPACITY, STATUS, STORAGECLASS, AGE
         ResourceType::PersistentVolumes => vec![
             Constraint::Percentage(25),
             Constraint::Percentage(15),
@@ -181,31 +287,25 @@ fn column_widths(resource_type: crate::types::ResourceType) -> Vec<ratatui::layo
             Constraint::Percentage(25),
             Constraint::Percentage(20),
         ],
-        // 3 columns: NAME, PROVISIONER, AGE
         ResourceType::StorageClasses => vec![
             Constraint::Percentage(30),
             Constraint::Percentage(50),
             Constraint::Percentage(20),
         ],
-        // 2 columns: NAME, AGE
-        ResourceType::ServiceAccounts | ResourceType::ResourceQuotas | ResourceType::LimitRanges => vec![
-            Constraint::Percentage(60),
-            Constraint::Percentage(40),
-        ],
-        // 3 columns: NAME, STATUS, AGE
+        ResourceType::ServiceAccounts
+        | ResourceType::ResourceQuotas
+        | ResourceType::LimitRanges => vec![Constraint::Percentage(60), Constraint::Percentage(40)],
         ResourceType::Namespaces => vec![
             Constraint::Percentage(40),
             Constraint::Percentage(30),
             Constraint::Percentage(30),
         ],
-        // 4 columns: NAME, STATUS, ROLES, AGE
         ResourceType::Nodes => vec![
             Constraint::Percentage(30),
             Constraint::Percentage(20),
             Constraint::Percentage(25),
             Constraint::Percentage(25),
         ],
-        // 5 columns: NAME, TYPE, REASON, MESSAGE, AGE
         ResourceType::Events => vec![
             Constraint::Percentage(20),
             Constraint::Percentage(10),
@@ -213,7 +313,6 @@ fn column_widths(resource_type: crate::types::ResourceType) -> Vec<ratatui::layo
             Constraint::Percentage(40),
             Constraint::Percentage(15),
         ],
-        // 4 columns: NAME, MIN-AVAILABLE, MAX-UNAVAILABLE, AGE
         ResourceType::PodDisruptionBudgets => vec![
             Constraint::Percentage(30),
             Constraint::Percentage(25),
@@ -225,7 +324,9 @@ fn column_widths(resource_type: crate::types::ResourceType) -> Vec<ratatui::layo
 
 fn status_style(status: &str) -> Style {
     match status {
-        "Running" | "Bound" | "Active" | "Ready" | "Available" => Style::default().fg(Color::Green),
+        "Running" | "Bound" | "Active" | "Ready" | "Available" => {
+            Style::default().fg(Color::Green)
+        }
         "Pending" | "ContainerCreating" | "Updating" => Style::default().fg(Color::Yellow),
         "Failed" | "Error" | "CrashLoopBackOff" | "Lost" | "NotReady" => {
             Style::default().fg(Color::Red)

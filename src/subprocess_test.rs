@@ -32,8 +32,8 @@ mod tests {
 
     fn app_in_logs_view() -> App {
         let mut app = App::new();
-        app.resources = vec![fake_pod("pod-0")];
-        app.resource_type = ResourceType::Pods;
+        app.resources_by_type.insert(ResourceType::Pods, vec![fake_pod("pod-0")]);
+        app.selected_resource_types = vec![ResourceType::Pods];
         app.view_mode = ViewMode::Logs;
         app.log_lines = vec![
             "log line 1".to_string(),
@@ -177,8 +177,8 @@ mod tests {
     fn test_edit_yaml_action() {
         let mut app = App::new();
         app.focus = crate::types::Focus::ResourceList;
-        app.resources = vec![fake_pod("pod-0")];
-        app.resource_type = ResourceType::Pods;
+        app.resources_by_type.insert(ResourceType::Pods, vec![fake_pod("pod-0")]);
+        app.selected_resource_types = vec![ResourceType::Pods];
         let action = app.handle_input(key(KeyCode::Char('e')));
         assert_eq!(action, InputAction::Edit);
     }
@@ -187,8 +187,8 @@ mod tests {
     #[test]
     fn test_edit_from_detail_view() {
         let mut app = App::new();
-        app.resources = vec![fake_pod("pod-0")];
-        app.resource_type = ResourceType::Pods;
+        app.resources_by_type.insert(ResourceType::Pods, vec![fake_pod("pod-0")]);
+        app.selected_resource_types = vec![ResourceType::Pods];
         app.view_mode = ViewMode::Detail;
         let action = app.handle_input(key(KeyCode::Char('e')));
         assert_eq!(action, InputAction::Edit);

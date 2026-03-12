@@ -1,24 +1,25 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::widgets::TableState;
 
 use crate::types::{
-    fuzzy_match, ConfirmAction, Focus, ResourceItem, ResourceType, SearchResult, ViewMode,
+    fuzzy_match, ConfirmAction, Focus, ResourceItem, ResourceType, SearchResult, SelectorTarget,
+    ViewMode,
 };
 
 pub struct App {
     // Navigation
     pub contexts: Vec<String>,
-    pub selected_context: usize,
+    pub selected_contexts: HashSet<usize>,
     pub namespaces: Vec<String>,
-    pub selected_namespace: usize,
-    pub preferred_namespace: Option<String>, // from kubeconfig, used to pre-select on load
-    pub resource_type: ResourceType,
+    pub selected_namespaces: HashSet<usize>,
+    pub preferred_namespace: Option<String>,
+    pub selected_resource_types: Vec<ResourceType>,
     pub focus: Focus,
 
-    // Resource list
-    pub resources: Vec<ResourceItem>,
+    // Resource list (per-type storage for multi-type display)
+    pub resources_by_type: HashMap<ResourceType, Vec<ResourceItem>>,
     pub table_state: TableState,
     pub loading: bool,
 
@@ -44,9 +45,10 @@ pub struct App {
 
     // Dropdown selector
     pub dropdown_query: String,
-    pub dropdown_filtered: Vec<usize>, // indices into the items list for the focused selector
-    pub dropdown_selected: usize,      // index into dropdown_filtered
-    pub dropdown_visible: bool,        // whether the dropdown list is shown
+    pub dropdown_filtered: Vec<usize>,
+    pub dropdown_selected: usize,
+    pub dropdown_visible: bool,
+    pub dropdown_toggled: HashSet<usize>, // items toggled with Space (multi-select)
 
     // Search
     pub search_query: String,
@@ -65,21 +67,41 @@ pub struct App {
     pub should_quit: bool,
 }
 
+/// A row in the flattened multi-type resource list.
+#[derive(Debug, Clone)]
+pub enum DisplayRow {
+    /// Divider line for a resource type section.
+    TypeDivider(ResourceType),
+    /// An actual resource row.
+    Resource {
+        resource_type: ResourceType,
+        index: usize, // index into resources_by_type[resource_type]
+    },
+}
+
 impl App {
     pub fn new() -> Self {
         let mut table_state = TableState::default();
         table_state.select(Some(0));
 
-        let mut app = Self {
+        Self {
             contexts: vec!["default-context".to_string()],
-            selected_context: 0,
+            selected_contexts: {
+                let mut s = HashSet::new();
+                s.insert(0);
+                s
+            },
             namespaces: vec!["default".to_string()],
-            selected_namespace: 0,
+            selected_namespaces: {
+                let mut s = HashSet::new();
+                s.insert(0);
+                s
+            },
             preferred_namespace: None,
-            resource_type: ResourceType::Pods,
-            focus: Focus::ContextSelector,
+            selected_resource_types: vec![ResourceType::Pods],
+            focus: Focus::ResourceList,
 
-            resources: Vec::new(),
+            resources_by_type: HashMap::new(),
             table_state,
             loading: false,
 
@@ -102,6 +124,7 @@ impl App {
             dropdown_filtered: Vec::new(),
             dropdown_selected: 0,
             dropdown_visible: false,
+            dropdown_toggled: HashSet::new(),
 
             search_query: String::new(),
             search_results: Vec::new(),
@@ -115,40 +138,108 @@ impl App {
             resource_counts: HashMap::new(),
 
             should_quit: false,
-        };
-        app.dropdown_open();
-        app
+        }
     }
 
+    /// Returns the first selected context name (primary context for K8s operations).
     pub fn current_context(&self) -> &str {
-        self.contexts
-            .get(self.selected_context)
+        self.selected_contexts
+            .iter()
+            .min()
+            .and_then(|&idx| self.contexts.get(idx))
             .map(|s| s.as_str())
             .unwrap_or("")
     }
 
+    /// Returns the first selected namespace name (primary namespace for K8s operations).
     pub fn current_namespace(&self) -> &str {
-        self.namespaces
-            .get(self.selected_namespace)
+        self.selected_namespaces
+            .iter()
+            .min()
+            .and_then(|&idx| self.namespaces.get(idx))
             .map(|s| s.as_str())
             .unwrap_or("")
     }
 
-    pub fn selected_resource(&self) -> Option<&ResourceItem> {
+    /// Returns the primary resource type (first selected).
+    pub fn primary_resource_type(&self) -> ResourceType {
+        self.selected_resource_types
+            .first()
+            .copied()
+            .unwrap_or(ResourceType::Pods)
+    }
+
+    /// Build the flat list of display rows for multi-type view.
+    pub fn display_rows(&self) -> Vec<DisplayRow> {
+        let mut rows = Vec::new();
+        let multi_type = self.selected_resource_types.len() > 1;
+
+        for &rt in &self.selected_resource_types {
+            let items = self.resources_by_type.get(&rt);
+            if multi_type {
+                rows.push(DisplayRow::TypeDivider(rt));
+            }
+
+            if let Some(items) = items {
+                let filter_lower = self.filter.to_lowercase();
+                for (i, item) in items.iter().enumerate() {
+                    if self.filter.is_empty()
+                        || item.name.to_lowercase().contains(&filter_lower)
+                    {
+                        rows.push(DisplayRow::Resource {
+                            resource_type: rt,
+                            index: i,
+                        });
+                    }
+                }
+            }
+        }
+        rows
+    }
+
+    /// Get the resource at the current table selection.
+    pub fn selected_resource(&self) -> Option<(&ResourceItem, ResourceType)> {
         let idx = self.table_state.selected()?;
-        self.filtered_resources().into_iter().nth(idx)
+        let rows = self.display_rows();
+        match rows.get(idx)? {
+            DisplayRow::Resource {
+                resource_type,
+                index,
+            } => {
+                let item = self.resources_by_type.get(resource_type)?.get(*index)?;
+                Some((item, *resource_type))
+            }
+            DisplayRow::TypeDivider(_) => None,
+        }
     }
 
     pub fn selected_resource_name(&self) -> Option<String> {
-        self.selected_resource().map(|r| r.name.clone())
+        self.selected_resource().map(|(r, _)| r.name.clone())
     }
 
+    /// Get the resource type of the currently selected row.
+    pub fn selected_row_resource_type(&self) -> Option<ResourceType> {
+        let idx = self.table_state.selected()?;
+        let rows = self.display_rows();
+        match rows.get(idx)? {
+            DisplayRow::Resource { resource_type, .. } => Some(*resource_type),
+            DisplayRow::TypeDivider(rt) => Some(*rt),
+        }
+    }
+
+    #[allow(dead_code)]
+    /// Legacy compatibility: flat list of all resources matching filter.
     pub fn filtered_resources(&self) -> Vec<&ResourceItem> {
+        let rt = self.primary_resource_type();
+        let items = match self.resources_by_type.get(&rt) {
+            Some(items) => items,
+            None => return Vec::new(),
+        };
         if self.filter.is_empty() {
-            self.resources.iter().collect()
+            items.iter().collect()
         } else {
             let filter_lower = self.filter.to_lowercase();
-            self.resources
+            items
                 .iter()
                 .filter(|r| r.name.to_lowercase().contains(&filter_lower))
                 .collect()
@@ -176,7 +267,6 @@ impl App {
             scored.sort_by(|a, b| b.1.cmp(&a.1));
             self.search_filtered = scored.into_iter().map(|(i, _)| i).collect();
         }
-        // Reset selection to top
         if self.search_filtered.is_empty() {
             self.search_table_state.select(None);
         } else {
@@ -184,24 +274,24 @@ impl App {
         }
     }
 
-    /// Returns the list of items for the currently focused selector.
+    /// Returns the list of items for the currently active selector.
     pub fn dropdown_items(&self) -> Vec<String> {
         match self.focus {
-            Focus::ContextSelector => self.contexts.clone(),
-            Focus::NamespaceSelector => self.namespaces.clone(),
-            Focus::ResourceTypeSelector => {
-                self.visible_resource_types().into_iter().map(|(label, _)| label).collect()
+            Focus::Selector(SelectorTarget::Context) => self.contexts.clone(),
+            Focus::Selector(SelectorTarget::Namespace) => self.namespaces.clone(),
+            Focus::Selector(SelectorTarget::ResourceType) => {
+                self.visible_resource_types()
+                    .into_iter()
+                    .map(|(label, _)| label)
+                    .collect()
             }
             Focus::ResourceList => Vec::new(),
         }
     }
 
     /// Returns visible resource types as (display_label, ALL_index) pairs.
-    /// When counts are available, filters out zero-count types and appends count.
-    /// The currently selected type is always included.
     pub fn visible_resource_types(&self) -> Vec<(String, usize)> {
         if self.resource_counts.is_empty() {
-            // No counts loaded yet — show all types without counts
             ResourceType::ALL
                 .iter()
                 .enumerate()
@@ -213,7 +303,7 @@ impl App {
                 .enumerate()
                 .filter_map(|(i, t)| {
                     let count = self.resource_counts.get(t).copied().unwrap_or(0);
-                    if count > 0 || *t == self.resource_type {
+                    if count > 0 || self.selected_resource_types.contains(t) {
                         let label = if count > 0 {
                             format!("{} ({})", t, count)
                         } else {
@@ -231,31 +321,43 @@ impl App {
     /// Maps a dropdown item index (for ResourceTypeSelector) back to a ResourceType::ALL index.
     fn resource_type_all_index(&self, dropdown_item_idx: usize) -> usize {
         let visible = self.visible_resource_types();
-        visible.get(dropdown_item_idx).map(|(_, all_idx)| *all_idx).unwrap_or(0)
+        visible
+            .get(dropdown_item_idx)
+            .map(|(_, all_idx)| *all_idx)
+            .unwrap_or(0)
     }
 
-    /// Reset dropdown state when entering a selector and show dropdown with current item selected.
-    pub fn dropdown_open(&mut self) {
+    /// Open a selector overlay.
+    pub fn open_selector(&mut self, target: SelectorTarget) {
+        self.focus = Focus::Selector(target);
         self.dropdown_query.clear();
         self.dropdown_visible = true;
-        self.update_dropdown_filter();
-        // Pre-select the currently active item in the dropdown
-        let current_item_idx = match self.focus {
-            Focus::ContextSelector => self.selected_context,
-            Focus::NamespaceSelector => self.selected_namespace,
-            Focus::ResourceTypeSelector => {
-                self.visible_resource_types()
-                    .iter()
-                    .position(|(_, all_idx)| ResourceType::ALL[*all_idx] == self.resource_type)
-                    .unwrap_or(0)
+        self.dropdown_toggled.clear();
+
+        // Pre-populate toggles with current selections
+        match target {
+            SelectorTarget::Context => {
+                self.dropdown_toggled = self.selected_contexts.clone();
             }
-            Focus::ResourceList => 0,
-        };
-        self.dropdown_selected = self
-            .dropdown_filtered
-            .iter()
-            .position(|&idx| idx == current_item_idx)
-            .unwrap_or(0);
+            SelectorTarget::Namespace => {
+                self.dropdown_toggled = self.selected_namespaces.clone();
+            }
+            SelectorTarget::ResourceType => {
+                // Map selected types to visible indices
+                let visible = self.visible_resource_types();
+                for &rt in &self.selected_resource_types {
+                    if let Some(pos) = visible.iter().position(|(_, all_idx)| {
+                        ResourceType::ALL[*all_idx] == rt
+                    }) {
+                        self.dropdown_toggled.insert(pos);
+                    }
+                }
+            }
+        }
+
+        self.update_dropdown_filter();
+        // Pre-select the first item
+        self.dropdown_selected = 0;
     }
 
     /// Re-filter the dropdown items using fuzzy match on the query.
@@ -274,7 +376,6 @@ impl App {
             scored.sort_by(|a, b| b.1.cmp(&a.1));
             self.dropdown_filtered = scored.into_iter().map(|(i, _)| i).collect();
         }
-        // Reset selection to top or clamp
         if self.dropdown_filtered.is_empty() {
             self.dropdown_selected = 0;
         } else {
@@ -282,55 +383,78 @@ impl App {
         }
     }
 
-    /// Confirm the currently selected dropdown item and advance focus.
+    /// Confirm the dropdown selection (Enter). Selects all toggled items + the currently
+    /// highlighted item, then closes the selector.
     fn dropdown_confirm(&mut self) -> InputAction {
-        let action = if self.dropdown_visible {
-            if let Some(&item_idx) = self.dropdown_filtered.get(self.dropdown_selected) {
-                match self.focus {
-                    Focus::ContextSelector => {
-                        if item_idx != self.selected_context {
-                            self.selected_context = item_idx;
-                            InputAction::ContextChanged
-                        } else {
-                            InputAction::None
-                        }
-                    }
-                    Focus::NamespaceSelector => {
-                        if item_idx != self.selected_namespace {
-                            self.selected_namespace = item_idx;
-                            InputAction::NamespaceChanged
-                        } else {
-                            InputAction::None
-                        }
-                    }
-                    Focus::ResourceTypeSelector => {
-                        let all_idx = self.resource_type_all_index(item_idx);
-                        let new_type = ResourceType::ALL[all_idx];
-                        if new_type != self.resource_type {
-                            self.resource_type = new_type;
-                            InputAction::ResourceTypeChanged
-                        } else {
-                            InputAction::None
-                        }
-                    }
-                    Focus::ResourceList => InputAction::None,
-                }
-            } else {
-                InputAction::None
-            }
-        } else {
-            InputAction::None
-        };
-        // Advance focus to next selector
-        self.focus = self.focus.next();
-        if matches!(
-            self.focus,
-            Focus::ContextSelector | Focus::NamespaceSelector | Focus::ResourceTypeSelector
-        ) {
-            self.dropdown_open();
-        } else {
-            self.dropdown_visible = false;
+        if !self.dropdown_visible {
+            self.focus = Focus::ResourceList;
+            return InputAction::None;
         }
+
+        // Add the currently highlighted item to toggles (if not already)
+        if let Some(&item_idx) = self.dropdown_filtered.get(self.dropdown_selected) {
+            self.dropdown_toggled.insert(item_idx);
+        }
+
+        let action = match self.focus {
+            Focus::Selector(SelectorTarget::Context) => {
+                if self.dropdown_toggled.is_empty() {
+                    InputAction::None
+                } else if self.dropdown_toggled != self.selected_contexts {
+                    self.selected_contexts = self.dropdown_toggled.clone();
+                    InputAction::ContextChanged
+                } else {
+                    InputAction::None
+                }
+            }
+            Focus::Selector(SelectorTarget::Namespace) => {
+                if self.dropdown_toggled.is_empty() {
+                    InputAction::None
+                } else if self.dropdown_toggled != self.selected_namespaces {
+                    self.selected_namespaces = self.dropdown_toggled.clone();
+                    InputAction::NamespaceChanged
+                } else {
+                    InputAction::None
+                }
+            }
+            Focus::Selector(SelectorTarget::ResourceType) => {
+                let new_types: Vec<ResourceType> = self
+                    .dropdown_toggled
+                    .iter()
+                    .copied()
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .map(|idx| {
+                        let all_idx = self.resource_type_all_index(idx);
+                        ResourceType::ALL[all_idx]
+                    })
+                    .collect();
+
+                if new_types.is_empty() {
+                    InputAction::None
+                } else {
+                    // Sort by ALL index order for consistent display
+                    let mut sorted: Vec<ResourceType> = new_types;
+                    sorted.sort_by_key(|rt| {
+                        ResourceType::ALL.iter().position(|t| t == rt).unwrap_or(0)
+                    });
+                    sorted.dedup();
+                    if sorted != self.selected_resource_types {
+                        self.selected_resource_types = sorted;
+                        InputAction::ResourceTypeChanged
+                    } else {
+                        InputAction::None
+                    }
+                }
+            }
+            Focus::ResourceList => InputAction::None,
+        };
+
+        // Close selector and return to resource list
+        self.focus = Focus::ResourceList;
+        self.dropdown_visible = false;
+        self.dropdown_toggled.clear();
+        self.table_state.select(Some(0));
         action
     }
 
@@ -338,7 +462,6 @@ impl App {
         if let Some(ref _msg) = self.error_message {
             self.error_ticks += 1;
             if self.error_ticks > 20 {
-                // ~5 seconds at 250ms tick
                 self.error_message = None;
                 self.error_ticks = 0;
             }
@@ -350,7 +473,6 @@ impl App {
         self.error_ticks = 0;
     }
 
-    /// Handle key input. Returns true if an action requiring K8s interaction was triggered.
     pub fn handle_input(&mut self, key: KeyEvent) -> InputAction {
         // Global quit
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
@@ -358,10 +480,11 @@ impl App {
             return InputAction::None;
         }
 
-        // Global Ctrl+F to enter search (from List or selector views, not from other modes)
+        // Global Ctrl+F to enter search (from List view only, not from selector or other modes)
         if key.modifiers.contains(KeyModifiers::CONTROL)
             && key.code == KeyCode::Char('f')
             && self.view_mode == ViewMode::List
+            && self.focus == Focus::ResourceList
         {
             self.view_mode = ViewMode::Search;
             self.search_query.clear();
@@ -402,7 +525,6 @@ impl App {
             }
             KeyCode::Enter => {
                 self.filter_active = false;
-                // Keep the filter but exit filter mode
                 self.table_state.select(Some(0));
             }
             KeyCode::Backspace => {
@@ -428,7 +550,6 @@ impl App {
                 }
             }
             _ => {
-                // Any other key cancels
                 self.view_mode = ViewMode::List;
                 InputAction::None
             }
@@ -438,9 +559,7 @@ impl App {
     fn handle_list_input(&mut self, key: KeyEvent) -> InputAction {
         match self.focus {
             Focus::ResourceList => self.handle_resource_list_input(key),
-            Focus::ContextSelector
-            | Focus::NamespaceSelector
-            | Focus::ResourceTypeSelector => self.handle_selector_input(key),
+            Focus::Selector(_) => self.handle_selector_input(key),
         }
     }
 
@@ -458,28 +577,17 @@ impl App {
                 self.select_prev();
                 InputAction::None
             }
-            KeyCode::Tab => {
-                self.focus = self.focus.next();
-                if matches!(
-                    self.focus,
-                    Focus::ContextSelector
-                        | Focus::NamespaceSelector
-                        | Focus::ResourceTypeSelector
-                ) {
-                    self.dropdown_open();
-                }
+            // C/N/T to open selectors
+            KeyCode::Char('c') => {
+                self.open_selector(SelectorTarget::Context);
                 InputAction::None
             }
-            KeyCode::BackTab => {
-                self.focus = self.focus.prev();
-                if matches!(
-                    self.focus,
-                    Focus::ContextSelector
-                        | Focus::NamespaceSelector
-                        | Focus::ResourceTypeSelector
-                ) {
-                    self.dropdown_open();
-                }
+            KeyCode::Char('n') => {
+                self.open_selector(SelectorTarget::Namespace);
+                InputAction::None
+            }
+            KeyCode::Char('t') => {
+                self.open_selector(SelectorTarget::ResourceType);
                 InputAction::None
             }
             KeyCode::Enter => {
@@ -492,15 +600,16 @@ impl App {
                 }
             }
             KeyCode::Char('l') => {
-                if self.resource_type.supports_logs() && self.selected_resource().is_some() {
-                    self.view_mode = ViewMode::Logs;
-                    self.log_lines.clear();
-                    self.log_scroll = 0;
-                    self.log_follow = true;
-                    InputAction::StreamLogs
-                } else {
-                    InputAction::None
+                if let Some((_, rt)) = self.selected_resource() {
+                    if rt.supports_logs() {
+                        self.view_mode = ViewMode::Logs;
+                        self.log_lines.clear();
+                        self.log_scroll = 0;
+                        self.log_follow = true;
+                        return InputAction::StreamLogs;
+                    }
                 }
+                InputAction::None
             }
             KeyCode::Char('d') => {
                 if self.selected_resource().is_some() {
@@ -509,8 +618,10 @@ impl App {
                 InputAction::None
             }
             KeyCode::Char('r') => {
-                if self.resource_type.supports_restart() && self.selected_resource().is_some() {
-                    self.view_mode = ViewMode::Confirm(ConfirmAction::Restart);
+                if let Some((_, rt)) = self.selected_resource() {
+                    if rt.supports_restart() {
+                        self.view_mode = ViewMode::Confirm(ConfirmAction::Restart);
+                    }
                 }
                 InputAction::None
             }
@@ -527,7 +638,6 @@ impl App {
                 InputAction::None
             }
             KeyCode::Char('?') => {
-                // TODO: help overlay
                 InputAction::None
             }
             _ => InputAction::None,
@@ -537,52 +647,27 @@ impl App {
     fn handle_selector_input(&mut self, key: KeyEvent) -> InputAction {
         match key.code {
             KeyCode::Esc => {
-                if self.dropdown_visible {
-                    // Close dropdown, stay on selector
-                    self.dropdown_visible = false;
-                    self.dropdown_query.clear();
-                } else {
-                    // Leave selector, go to resource list
-                    self.focus = Focus::ResourceList;
-                }
+                // Close selector, return to resource list (discard pending changes)
+                self.focus = Focus::ResourceList;
+                self.dropdown_visible = false;
+                self.dropdown_toggled.clear();
                 InputAction::None
             }
             KeyCode::Enter => {
-                // Confirm selection from dropdown and advance focus
                 self.dropdown_confirm()
             }
-            KeyCode::Tab => {
-                // Move to next focus without changing selection
-                self.dropdown_visible = false;
-                self.focus = self.focus.next();
-                if matches!(
-                    self.focus,
-                    Focus::ContextSelector
-                        | Focus::NamespaceSelector
-                        | Focus::ResourceTypeSelector
-                ) {
-                    self.dropdown_open();
-                }
-                InputAction::None
-            }
-            KeyCode::BackTab => {
-                self.dropdown_visible = false;
-                self.focus = self.focus.prev();
-                if matches!(
-                    self.focus,
-                    Focus::ContextSelector
-                        | Focus::NamespaceSelector
-                        | Focus::ResourceTypeSelector
-                ) {
-                    self.dropdown_open();
+            KeyCode::Char(' ') => {
+                // Toggle selection of current item (multi-select)
+                if let Some(&item_idx) = self.dropdown_filtered.get(self.dropdown_selected) {
+                    if self.dropdown_toggled.contains(&item_idx) {
+                        self.dropdown_toggled.remove(&item_idx);
+                    } else {
+                        self.dropdown_toggled.insert(item_idx);
+                    }
                 }
                 InputAction::None
             }
             KeyCode::Down => {
-                if !self.dropdown_visible {
-                    self.dropdown_visible = true;
-                    self.update_dropdown_filter();
-                }
                 if !self.dropdown_filtered.is_empty() {
                     self.dropdown_selected =
                         (self.dropdown_selected + 1) % self.dropdown_filtered.len();
@@ -590,10 +675,6 @@ impl App {
                 InputAction::None
             }
             KeyCode::Up => {
-                if !self.dropdown_visible {
-                    self.dropdown_visible = true;
-                    self.update_dropdown_filter();
-                }
                 if !self.dropdown_filtered.is_empty() {
                     self.dropdown_selected = if self.dropdown_selected == 0 {
                         self.dropdown_filtered.len() - 1
@@ -612,9 +693,6 @@ impl App {
                 InputAction::None
             }
             KeyCode::Char(c) => {
-                if !self.dropdown_visible {
-                    self.dropdown_visible = true;
-                }
                 self.dropdown_query.push(c);
                 self.dropdown_selected = 0;
                 self.update_dropdown_filter();
@@ -625,6 +703,7 @@ impl App {
     }
 
     fn handle_detail_input(&mut self, key: KeyEvent) -> InputAction {
+        let rt = self.selected_row_resource_type();
         match key.code {
             KeyCode::Char('q') | KeyCode::Esc => {
                 self.view_mode = ViewMode::List;
@@ -639,7 +718,6 @@ impl App {
                 InputAction::None
             }
             KeyCode::Char('G') => {
-                // Jump to bottom
                 let lines = self.detail_text.lines().count() as u16;
                 self.detail_scroll = lines.saturating_sub(10);
                 InputAction::None
@@ -649,7 +727,9 @@ impl App {
                 InputAction::None
             }
             KeyCode::Char('l') => {
-                if self.resource_type.supports_logs() && self.selected_resource().is_some() {
+                if rt.map(|t| t.supports_logs()).unwrap_or(false)
+                    && self.selected_resource().is_some()
+                {
                     self.view_mode = ViewMode::Logs;
                     self.log_lines.clear();
                     self.log_scroll = 0;
@@ -666,7 +746,9 @@ impl App {
                 InputAction::None
             }
             KeyCode::Char('r') => {
-                if self.resource_type.supports_restart() && self.selected_resource().is_some() {
+                if rt.map(|t| t.supports_restart()).unwrap_or(false)
+                    && self.selected_resource().is_some()
+                {
                     self.view_mode = ViewMode::Confirm(ConfirmAction::Restart);
                 }
                 InputAction::None
@@ -736,11 +818,11 @@ impl App {
                 self.update_search_filter();
                 InputAction::None
             }
-            KeyCode::Down | KeyCode::Tab => {
+            KeyCode::Down => {
                 self.search_select_next();
                 InputAction::None
             }
-            KeyCode::Up | KeyCode::BackTab => {
+            KeyCode::Up => {
                 self.search_select_prev();
                 InputAction::None
             }
@@ -865,29 +947,47 @@ impl App {
     }
 
     fn select_next(&mut self) {
-        let len = self.filtered_resources().len();
+        let rows = self.display_rows();
+        let len = rows.len();
         if len == 0 {
             return;
         }
-        let i = self
-            .table_state
-            .selected()
-            .map(|i| (i + 1) % len)
-            .unwrap_or(0);
-        self.table_state.select(Some(i));
+        let current = self.table_state.selected().unwrap_or(0);
+        // Move to next non-divider row
+        let mut next = (current + 1) % len;
+        let start = next;
+        loop {
+            if matches!(rows[next], DisplayRow::Resource { .. }) {
+                break;
+            }
+            next = (next + 1) % len;
+            if next == start {
+                // All dividers, shouldn't happen
+                break;
+            }
+        }
+        self.table_state.select(Some(next));
     }
 
     fn select_prev(&mut self) {
-        let len = self.filtered_resources().len();
+        let rows = self.display_rows();
+        let len = rows.len();
         if len == 0 {
             return;
         }
-        let i = self
-            .table_state
-            .selected()
-            .map(|i| if i == 0 { len - 1 } else { i - 1 })
-            .unwrap_or(0);
-        self.table_state.select(Some(i));
+        let current = self.table_state.selected().unwrap_or(0);
+        let mut prev = if current == 0 { len - 1 } else { current - 1 };
+        let start = prev;
+        loop {
+            if matches!(rows[prev], DisplayRow::Resource { .. }) {
+                break;
+            }
+            prev = if prev == 0 { len - 1 } else { prev - 1 };
+            if prev == start {
+                break;
+            }
+        }
+        self.table_state.select(Some(prev));
     }
 }
 

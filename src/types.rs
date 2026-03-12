@@ -194,32 +194,19 @@ impl fmt::Display for ConfirmAction {
     }
 }
 
+/// Which selector is currently active (open). None means focus is on the main resource list.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Focus {
-    ContextSelector,
-    NamespaceSelector,
-    ResourceTypeSelector,
-    ResourceList,
+pub enum SelectorTarget {
+    Context,
+    Namespace,
+    ResourceType,
 }
 
-impl Focus {
-    pub fn next(self) -> Self {
-        match self {
-            Focus::ContextSelector => Focus::NamespaceSelector,
-            Focus::NamespaceSelector => Focus::ResourceTypeSelector,
-            Focus::ResourceTypeSelector => Focus::ResourceList,
-            Focus::ResourceList => Focus::ContextSelector,
-        }
-    }
-
-    pub fn prev(self) -> Self {
-        match self {
-            Focus::ContextSelector => Focus::ResourceList,
-            Focus::NamespaceSelector => Focus::ContextSelector,
-            Focus::ResourceTypeSelector => Focus::NamespaceSelector,
-            Focus::ResourceList => Focus::ResourceTypeSelector,
-        }
-    }
+/// Focus state: either on the resource list or on a selector overlay.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Focus {
+    ResourceList,
+    Selector(SelectorTarget),
 }
 
 #[derive(Debug, Clone)]
