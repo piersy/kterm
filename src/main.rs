@@ -420,20 +420,26 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                             disable_raw_mode()?;
                             execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
 
-                            if let Some((client, ns, pod_name)) = client_and_pod {
-                                let _ = open_logs_in_less(
+                            let cleanup = if let Some((client, ns, pod_name)) = client_and_pod {
+                                open_logs_in_less(
                                     &app.log_lines,
                                     client,
                                     ns,
                                     pod_name,
                                     None,
-                                );
-                            }
+                                ).ok()
+                            } else {
+                                None
+                            };
 
                             enable_raw_mode()?;
                             execute!(terminal.backend_mut(), EnterAlternateScreen)?;
                             terminal.clear()?;
                             events.resume();
+
+                            if let Some(c) = cleanup {
+                                c.finish_in_background();
+                            }
                         }
                     }
                     InputAction::Edit => {
@@ -784,13 +790,31 @@ fn open_logs_in_editor(log_lines: &[String]) -> Result<()> {
     Ok(())
 }
 
+struct LessCleanup {
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    writer_handle: Option<std::thread::JoinHandle<()>>,
+    path: std::path::PathBuf,
+}
+
+impl LessCleanup {
+    fn finish_in_background(self) {
+        std::thread::spawn(move || {
+            self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+            if let Some(h) = self.writer_handle {
+                let _ = h.join();
+            }
+            let _ = std::fs::remove_file(&self.path);
+        });
+    }
+}
+
 fn open_logs_in_less(
     log_lines: &[String],
     client: kube::Client,
     namespace: String,
     pod_name: String,
     container: Option<String>,
-) -> Result<()> {
+) -> Result<LessCleanup> {
     use std::io::Write;
 
     let path = write_logs_to_tempfile(log_lines)?;
@@ -862,12 +886,11 @@ fn open_logs_in_less(
         libc::signal(libc::SIGINT, libc::SIG_DFL);
     }
 
-    // Signal the background writer to stop and wait for it
-    stop.store(true, std::sync::atomic::Ordering::Relaxed);
-    let _ = writer_handle.join();
-
-    let _ = std::fs::remove_file(&path);
-    Ok(())
+    Ok(LessCleanup {
+        stop,
+        writer_handle: Some(writer_handle),
+        path,
+    })
 }
 
 fn edit_yaml_in_editor(yaml: &str) -> Result<Option<String>> {
