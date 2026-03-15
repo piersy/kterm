@@ -213,11 +213,8 @@ mod tests {
         app.focus = Focus::ResourceList;
         assert_eq!(app.selected_resource_types, vec![ResourceType::Pods]);
 
-        // Open type selector
+        // Open type selector (nothing pre-toggled)
         app.handle_input(key(KeyCode::Char('t')));
-
-        // Pods is pre-toggled. Un-toggle it with Space.
-        app.handle_input(key(KeyCode::Char(' ')));
 
         // Navigate down to Deployments (index 1) and select with Enter
         app.handle_input(key(KeyCode::Down));
@@ -287,13 +284,15 @@ mod tests {
         let mut app = App::new();
         app.focus = Focus::ResourceList;
 
-        // Open type selector
+        // Open type selector (nothing pre-toggled)
         app.handle_input(key(KeyCode::Char('t')));
 
-        // Space toggles current item (index 0 = Pods, already toggled from pre-population)
-        // Move down to Deployments
+        // Toggle Pods with Space
+        app.handle_input(key(KeyCode::Char(' ')));
+        assert!(app.dropdown_toggled.contains(&0));
+
+        // Move down to Deployments and toggle
         app.handle_input(key(KeyCode::Down));
-        // Toggle Deployments with Space
         app.handle_input(key(KeyCode::Char(' ')));
         assert!(app.dropdown_toggled.contains(&1));
 
@@ -303,7 +302,7 @@ mod tests {
         app.handle_input(key(KeyCode::Char(' ')));
         assert!(app.dropdown_toggled.contains(&2));
 
-        // Enter confirms: should have Pods (pre-toggled) + Deployments + StatefulSets + current (StatefulSets, already toggled)
+        // Enter confirms: Pods + Deployments + StatefulSets (toggled) + current (StatefulSets, already toggled)
         let action = app.handle_input(key(KeyCode::Enter));
         assert_eq!(action, InputAction::ResourceTypeChanged);
         assert!(app.selected_resource_types.contains(&ResourceType::Pods));
@@ -316,15 +315,19 @@ mod tests {
         let mut app = App::new();
         app.focus = Focus::ResourceList;
 
-        // Open type selector - Pods is pre-toggled
+        // Open type selector (nothing pre-toggled)
         app.handle_input(key(KeyCode::Char('t')));
-        assert!(app.dropdown_toggled.contains(&0)); // Pods is pre-toggled
+        assert!(app.dropdown_toggled.is_empty());
 
-        // Space on Pods untoggle it
+        // Toggle Pods
+        app.handle_input(key(KeyCode::Char(' ')));
+        assert!(app.dropdown_toggled.contains(&0));
+
+        // Untoggle Pods
         app.handle_input(key(KeyCode::Char(' ')));
         assert!(!app.dropdown_toggled.contains(&0));
 
-        // Move to Deployments and confirm (only Deployments)
+        // Move to Deployments and confirm (only Deployments via Enter on current)
         app.handle_input(key(KeyCode::Down));
         let action = app.handle_input(key(KeyCode::Enter));
         assert_eq!(action, InputAction::ResourceTypeChanged);

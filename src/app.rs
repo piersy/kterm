@@ -334,27 +334,6 @@ impl App {
         self.dropdown_visible = true;
         self.dropdown_toggled.clear();
 
-        // Pre-populate toggles with current selections
-        match target {
-            SelectorTarget::Context => {
-                self.dropdown_toggled = self.selected_contexts.clone();
-            }
-            SelectorTarget::Namespace => {
-                self.dropdown_toggled = self.selected_namespaces.clone();
-            }
-            SelectorTarget::ResourceType => {
-                // Map selected types to visible indices
-                let visible = self.visible_resource_types();
-                for &rt in &self.selected_resource_types {
-                    if let Some(pos) = visible.iter().position(|(_, all_idx)| {
-                        ResourceType::ALL[*all_idx] == rt
-                    }) {
-                        self.dropdown_toggled.insert(pos);
-                    }
-                }
-            }
-        }
-
         self.update_dropdown_filter();
         // Pre-select the first item
         self.dropdown_selected = 0;
