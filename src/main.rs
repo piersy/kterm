@@ -237,7 +237,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                         app.loading = true;
                         app.resources_by_type.clear();
                         app.resource_counts.clear();
-                        app.table_state.select(Some(0));
+                        app.select_first_row();
 
                         // Start count fetch
                         let mgr = k8s_manager.clone();
@@ -268,7 +268,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                         abort_all_watchers(&mut watcher_handles);
                         app.loading = true;
                         app.resources_by_type.clear();
-                        app.table_state.select(Some(0));
+                        app.select_first_row();
 
                         start_watchers(&app, &k8s_manager, &tx, &mut watcher_handles);
                     }
@@ -680,10 +680,14 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                 let rows = app.display_rows();
                 let len = rows.len();
                 if len > 0 {
-                    if let Some(selected) = app.table_state.selected() {
-                        if selected >= len {
+                    match app.table_state.selected() {
+                        Some(selected) if selected >= len => {
                             app.table_state.select(Some(len - 1));
                         }
+                        None => {
+                            app.select_first_row();
+                        }
+                        _ => {}
                     }
                 }
             }
@@ -693,10 +697,14 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                 let rows = app.display_rows();
                 let len = rows.len();
                 if len > 0 {
-                    if let Some(selected) = app.table_state.selected() {
-                        if selected >= len {
+                    match app.table_state.selected() {
+                        Some(selected) if selected >= len => {
                             app.table_state.select(Some(len - 1));
                         }
+                        None => {
+                            app.select_first_row();
+                        }
+                        _ => {}
                     }
                 }
             }

@@ -433,7 +433,7 @@ impl App {
         self.focus = Focus::ResourceList;
         self.dropdown_visible = false;
         self.dropdown_toggled.clear();
-        self.table_state.select(Some(0));
+        self.select_first_row();
         action
     }
 
@@ -504,15 +504,15 @@ impl App {
             }
             KeyCode::Enter => {
                 self.filter_active = false;
-                self.table_state.select(Some(0));
+                self.select_first_row();
             }
             KeyCode::Backspace => {
                 self.filter.pop();
-                self.table_state.select(Some(0));
+                self.select_first_row();
             }
             KeyCode::Char(c) => {
                 self.filter.push(c);
-                self.table_state.select(Some(0));
+                self.select_first_row();
             }
             _ => {}
         }
@@ -967,6 +967,22 @@ impl App {
             }
         }
         self.table_state.select(Some(prev));
+    }
+
+    /// Select the first non-divider row in the display, or None if empty.
+    pub fn select_first_row(&mut self) {
+        let rows = self.display_rows();
+        if rows.is_empty() {
+            self.table_state.select(None);
+            return;
+        }
+        for (i, row) in rows.iter().enumerate() {
+            if matches!(row, DisplayRow::Resource { .. }) {
+                self.table_state.select(Some(i));
+                return;
+            }
+        }
+        self.table_state.select(None);
     }
 }
 
