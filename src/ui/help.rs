@@ -8,12 +8,13 @@ use crate::app::App;
 use crate::types::{ConfirmAction, Focus, ViewMode};
 
 fn resource_list_bindings(app: &App) -> String {
-    let mut parts = vec!["q:Quit", "Tab:Selector", "j/k:Nav", "Enter:Detail"];
-    if app.resource_type.supports_logs() {
+    let mut parts = vec!["q:Quit", "C:Cluster", "N:Namespace", "T:Type", "j/k:Nav", "Enter:Detail"];
+    let rt = app.selected_row_resource_type();
+    if rt.map(|t| t.supports_logs()).unwrap_or(app.primary_resource_type().supports_logs()) {
         parts.push("l:Logs");
     }
     parts.push("d:Delete");
-    if app.resource_type.supports_restart() {
+    if rt.map(|t| t.supports_restart()).unwrap_or(app.primary_resource_type().supports_restart()) {
         parts.push("r:Restart");
     }
     parts.push("e:Edit");
@@ -24,11 +25,12 @@ fn resource_list_bindings(app: &App) -> String {
 
 fn detail_bindings(app: &App) -> String {
     let mut parts = vec!["Esc:Back", "j/k:Scroll", "e:Edit"];
-    if app.resource_type.supports_logs() {
+    let rt = app.selected_row_resource_type();
+    if rt.map(|t| t.supports_logs()).unwrap_or(false) {
         parts.push("l:Logs");
     }
     parts.push("d:Delete");
-    if app.resource_type.supports_restart() {
+    if rt.map(|t| t.supports_restart()).unwrap_or(false) {
         parts.push("r:Restart");
     }
     parts.push("g/G:Top/Bottom");
@@ -37,8 +39,10 @@ fn detail_bindings(app: &App) -> String {
 
 fn search_detail_bindings(app: &App) -> String {
     let mut parts = vec!["Esc:Back to search", "j/k:Scroll"];
-    if app.resource_type.supports_logs() {
-        parts.push("l:Logs");
+    if let Some(result) = app.selected_search_result() {
+        if result.resource_type.supports_logs() {
+            parts.push("l:Logs");
+        }
     }
     parts.push("g/G:Top/Bottom");
     parts.join("  ")
@@ -50,17 +54,8 @@ pub fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
         ViewMode::List => {
             if app.filter_active {
                 "Esc:Cancel  Enter:Apply  Type to filter..."
-            } else if matches!(
-                app.focus,
-                Focus::ContextSelector
-                    | Focus::NamespaceSelector
-                    | Focus::ResourceTypeSelector
-            ) {
-                if app.dropdown_visible {
-                    "Esc:Close  Enter:Select  Up/Down:Nav  Type to filter..."
-                } else {
-                    "Esc:Back  Tab:Next  Type/Arrows:Search..."
-                }
+            } else if matches!(app.focus, Focus::Selector(_)) {
+                "Esc:Close  Enter:Confirm  Space:Toggle  Up/Down:Nav  Type to filter..."
             } else {
                 bindings_owned = resource_list_bindings(app);
                 &bindings_owned

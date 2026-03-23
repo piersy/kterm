@@ -12,7 +12,9 @@ pub enum AppEvent {
     #[allow(dead_code)]
     Resize(u16, u16),
     Tick,
+    #[allow(dead_code)]
     ResourcesUpdated(Vec<ResourceItem>),
+    ResourcesUpdatedForType(ResourceType, Vec<ResourceItem>),
     NamespacesLoaded(Vec<String>),
     DetailLoaded(String),
     LogLine(String),

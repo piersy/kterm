@@ -5,128 +5,162 @@ use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 use ratatui::Frame;
 
 use crate::app::App;
-use crate::types::Focus;
+use crate::types::{Focus, SelectorTarget};
 
+/// Render the three stacked selector rows (Cluster, Namespace, Type).
 pub fn render(frame: &mut Frame, app: &App, area: Rect) {
-    let chunks = Layout::horizontal([
-        Constraint::Percentage(33),
-        Constraint::Percentage(34),
-        Constraint::Percentage(33),
+    let chunks = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
     ])
     .split(area);
 
-    let show_query_for = |focus: Focus| -> Option<&str> {
-        if app.focus == focus && app.dropdown_visible && !app.dropdown_query.is_empty() {
-            Some(&app.dropdown_query)
-        } else {
-            None
-        }
-    };
+    let is_active = |target: SelectorTarget| matches!(app.focus, Focus::Selector(t) if t == target);
 
-    render_selector(
+    // Cluster row
+    render_selector_row(
         frame,
-        "Context",
-        &app.contexts,
-        app.selected_context,
-        app.focus == Focus::ContextSelector,
-        show_query_for(Focus::ContextSelector),
+        "Cluster",
+        &selected_context_names(app),
+        is_active(SelectorTarget::Context),
         chunks[0],
     );
 
-    render_selector(
+    // Namespace row
+    render_selector_row(
         frame,
         "Namespace",
-        &app.namespaces,
-        app.selected_namespace,
-        app.focus == Focus::NamespaceSelector,
-        show_query_for(Focus::NamespaceSelector),
+        &selected_namespace_names(app),
+        is_active(SelectorTarget::Namespace),
         chunks[1],
     );
 
-    let type_names: Vec<String> = crate::types::ResourceType::ALL
-        .iter()
-        .map(|t| t.to_string())
-        .collect();
-    let type_idx = crate::types::ResourceType::ALL
-        .iter()
-        .position(|t| *t == app.resource_type)
-        .unwrap_or(0);
-
-    render_selector(
+    // Type row
+    render_selector_row(
         frame,
         "Type",
-        &type_names,
-        type_idx,
-        app.focus == Focus::ResourceTypeSelector,
-        show_query_for(Focus::ResourceTypeSelector),
+        &selected_type_names(app),
+        is_active(SelectorTarget::ResourceType),
         chunks[2],
     );
 }
 
-fn render_selector(
+fn selected_context_names(app: &App) -> String {
+    let mut names: Vec<&str> = app
+        .selected_contexts
+        .iter()
+        .filter_map(|&idx| app.contexts.get(idx).map(|s| s.as_str()))
+        .collect();
+    names.sort();
+    if names.is_empty() {
+        "\u{2014}".to_string()
+    } else {
+        names.join(", ")
+    }
+}
+
+fn selected_namespace_names(app: &App) -> String {
+    let mut names: Vec<&str> = app
+        .selected_namespaces
+        .iter()
+        .filter_map(|&idx| app.namespaces.get(idx).map(|s| s.as_str()))
+        .collect();
+    names.sort();
+    if names.is_empty() {
+        "\u{2014}".to_string()
+    } else {
+        names.join(", ")
+    }
+}
+
+fn selected_type_names(app: &App) -> String {
+    if app.selected_resource_types.is_empty() {
+        "\u{2014}".to_string()
+    } else {
+        app.selected_resource_types
+            .iter()
+            .map(|t| t.to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+}
+
+fn render_selector_row(
     frame: &mut Frame,
-    title: &str,
-    items: &[String],
-    selected: usize,
-    focused: bool,
-    query: Option<&str>,
+    label: &str,
+    value: &str,
+    active: bool,
     area: Rect,
 ) {
-    let border_style = if focused {
-        Style::default().fg(Color::Cyan)
+    let label_style = if active {
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(Color::DarkGray)
     };
 
-    let block = Block::default()
-        .title(format!(" {} ", title))
-        .borders(Borders::ALL)
-        .border_style(border_style);
-
-    if let Some(q) = query {
-        // Dropdown visible: show search input with cursor
-        let display = format!("{}\u{2588}", q);
-        let paragraph = Paragraph::new(display)
-            .block(block)
-            .style(Style::default().fg(Color::White));
-        frame.render_widget(paragraph, area);
+    let value_style = if active {
+        Style::default().fg(Color::White).add_modifier(Modifier::BOLD)
     } else {
-        // Show current value (highlighted when focused)
-        let value = items.get(selected).map(|s| s.as_str()).unwrap_or("—");
+        Style::default().fg(Color::White)
+    };
 
-        let text_style = if focused {
-            Style::default()
-                .fg(Color::White)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(Color::DarkGray)
-        };
+    let hotkey = match label {
+        "Cluster" => "C",
+        "Namespace" => "N",
+        "Type" => "T",
+        _ => "",
+    };
 
-        let line = Line::from(vec![Span::styled(value, text_style)]);
+    let line = Line::from(vec![
+        Span::styled(format!(" [{}] ", hotkey), Style::default().fg(Color::Yellow)),
+        Span::styled(format!("{}: ", label), label_style),
+        Span::styled(value, value_style),
+    ]);
 
-        let paragraph = Paragraph::new(line).block(block).centered();
-        frame.render_widget(paragraph, area);
-    }
+    frame.render_widget(Paragraph::new(line), area);
 }
 
+/// Render the dropdown overlay for the active selector.
+/// This is rendered as a floating overlay on top of whatever is below.
 pub fn render_dropdown(frame: &mut Frame, app: &App, area: Rect) {
     let items = app.dropdown_items();
 
-    // Build the list items from the filtered indices
     let list_items: Vec<ListItem> = app
         .dropdown_filtered
         .iter()
         .map(|&idx| {
             let name = items.get(idx).map(|s| s.as_str()).unwrap_or("?");
-            ListItem::new(name.to_string())
+            let is_toggled = app.dropdown_toggled.contains(&idx);
+            let prefix = if is_toggled { "[x] " } else { "[ ] " };
+            let style = if is_toggled {
+                Style::default().fg(Color::Green)
+            } else {
+                Style::default()
+            };
+            ListItem::new(Line::from(vec![
+                Span::styled(prefix, style),
+                Span::styled(name.to_string(), Style::default()),
+            ]))
         })
         .collect();
 
+    let selector_name = match app.focus {
+        Focus::Selector(SelectorTarget::Context) => "Cluster",
+        Focus::Selector(SelectorTarget::Namespace) => "Namespace",
+        Focus::Selector(SelectorTarget::ResourceType) => "Type",
+        _ => "",
+    };
+
     let title = if app.dropdown_query.is_empty() {
-        format!(" {} items ", app.dropdown_filtered.len())
+        format!(" {} \u{2500} {} items ", selector_name, app.dropdown_filtered.len())
     } else {
         format!(
-            " {} matching ",
+            " {} \u{2500} filter: {}\u{2588} \u{2500} {} matching ",
+            selector_name,
+            app.dropdown_query,
             app.dropdown_filtered.len()
         )
     };
@@ -143,7 +177,7 @@ pub fn render_dropdown(frame: &mut Frame, app: &App, area: Rect) {
     let list = List::new(list_items)
         .block(block)
         .highlight_style(highlight_style)
-        .highlight_symbol("▶ ");
+        .highlight_symbol("\u{25b6} ");
 
     let mut state = ListState::default();
     if !app.dropdown_filtered.is_empty() {
