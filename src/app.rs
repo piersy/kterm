@@ -502,9 +502,23 @@ impl App {
             KeyCode::Esc => {
                 self.filter_active = false;
             }
-            KeyCode::Enter => {
+            KeyCode::Enter | KeyCode::Up | KeyCode::Down => {
                 self.filter_active = false;
                 self.select_first_row();
+                if key.code == KeyCode::Down {
+                    // Already on first row from select_first_row
+                } else if key.code == KeyCode::Up {
+                    // Select last row
+                    let rows = self.display_rows();
+                    if !rows.is_empty() {
+                        for i in (0..rows.len()).rev() {
+                            if matches!(rows[i], DisplayRow::Resource { .. }) {
+                                self.table_state.select(Some(i));
+                                break;
+                            }
+                        }
+                    }
+                }
             }
             KeyCode::Backspace => {
                 self.filter.pop();
@@ -613,7 +627,14 @@ impl App {
             }
             KeyCode::Char('/') => {
                 self.filter_active = true;
-                self.filter.clear();
+                // Keep existing filter text so user can continue editing
+                InputAction::None
+            }
+            KeyCode::Esc => {
+                if !self.filter.is_empty() {
+                    self.filter.clear();
+                    self.select_first_row();
+                }
                 InputAction::None
             }
             KeyCode::Char('?') => {
