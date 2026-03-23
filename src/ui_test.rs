@@ -27,7 +27,6 @@ mod tests {
                 ("restarts".to_string(), "0".to_string()),
                 ("node".to_string(), "node-a".to_string()),
             ],
-            raw_yaml: "---\napiVersion: v1\nkind: Pod".to_string(),
         }
     }
 
@@ -213,7 +212,6 @@ mod tests {
                     ("volume".to_string(), "pv-abc".to_string()),
                     ("capacity".to_string(), "10Gi".to_string()),
                 ],
-                raw_yaml: String::new(),
             }],
         );
         let output = render_to_string(&mut app, 100, 24);
@@ -246,7 +244,6 @@ mod tests {
                 status: "Active".to_string(),
                 age: "3d".to_string(),
                 extra: vec![("ready".to_string(), "3/3".to_string())],
-                raw_yaml: String::new(),
             }],
         );
         let output = render_to_string(&mut app, 100, 24);
@@ -462,8 +459,7 @@ mod tests {
                     status: "Running".to_string(),
                     age: "1h".to_string(),
                     extra: vec![],
-                    raw_yaml: String::new(),
-                },
+                    },
                 context: "gke-prod".to_string(),
                 resource_type: ResourceType::Pods,
             },
@@ -474,8 +470,7 @@ mod tests {
                     status: "Running".to_string(),
                     age: "2h".to_string(),
                     extra: vec![],
-                    raw_yaml: String::new(),
-                },
+                    },
                 context: "gke-staging".to_string(),
                 resource_type: ResourceType::Pods,
             },
@@ -486,8 +481,7 @@ mod tests {
                     status: "Running".to_string(),
                     age: "3d".to_string(),
                     extra: vec![],
-                    raw_yaml: String::new(),
-                },
+                    },
                 context: "gke-prod".to_string(),
                 resource_type: ResourceType::StatefulSets,
             },

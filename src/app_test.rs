@@ -33,7 +33,6 @@ mod tests {
                 ("restarts".to_string(), "0".to_string()),
                 ("node".to_string(), "node-a".to_string()),
             ],
-            raw_yaml: "---\napiVersion: v1\nkind: Pod".to_string(),
         }
     }
 
@@ -426,7 +425,6 @@ mod tests {
                 status: "Bound".to_string(),
                 age: "1d".to_string(),
                 extra: vec![],
-                raw_yaml: String::new(),
             }],
         );
         let action = app.handle_input(key(KeyCode::Char('l')));
@@ -576,7 +574,6 @@ mod tests {
                 ("volume".to_string(), "pv-001".to_string()),
                 ("capacity".to_string(), "10Gi".to_string()),
             ],
-            raw_yaml: String::new(),
         };
         let cols = item.columns(ResourceType::PersistentVolumeClaims);
         assert_eq!(cols[0], "my-pvc");
@@ -594,7 +591,6 @@ mod tests {
             status: "Active".to_string(),
             age: "5d".to_string(),
             extra: vec![("ready".to_string(), "3/3".to_string())],
-            raw_yaml: String::new(),
         };
         let cols = item.columns(ResourceType::StatefulSets);
         assert_eq!(cols[0], "my-ss");
@@ -653,7 +649,6 @@ mod tests {
                     ("restarts".to_string(), "0".to_string()),
                     ("node".to_string(), "node-a".to_string()),
                 ],
-                raw_yaml: String::new(),
             },
             context: ctx.to_string(),
             resource_type: rt,
@@ -983,7 +978,6 @@ mod tests {
                 status: "Active".to_string(),
                 age: "1d".to_string(),
                 extra: vec![],
-                raw_yaml: String::new(),
             }],
         );
         let rows = app.display_rows();
@@ -1012,7 +1006,6 @@ mod tests {
                 status: "Active".to_string(),
                 age: "1d".to_string(),
                 extra: vec![],
-                raw_yaml: String::new(),
             }],
         );
 

@@ -216,7 +216,6 @@ pub struct ResourceItem {
     pub status: String,
     pub age: String,
     pub extra: Vec<(String, String)>,
-    pub raw_yaml: String,
 }
 
 impl ResourceItem {

@@ -26,7 +26,6 @@ mod tests {
                 ("restarts".to_string(), "0".to_string()),
                 ("node".to_string(), "node-a".to_string()),
             ],
-            raw_yaml: "---\napiVersion: v1\nkind: Pod".to_string(),
         }
     }
 
