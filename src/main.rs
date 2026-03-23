@@ -477,40 +477,31 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                     }
                     InputAction::Edit => {
                         if let Some((resource, rt)) = app.selected_resource() {
-                            let yaml = resource.raw_yaml.clone();
                             let name = resource.name.clone();
                             let ns = app.current_namespace().to_string();
-                            let mgr = k8s_manager.clone();
                             let action_tx = tx.clone();
 
                             events.suspend();
                             disable_raw_mode()?;
                             execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
 
-                            let edited = edit_yaml_in_editor(&yaml);
+                            let mut cmd = std::process::Command::new("kubectl");
+                            cmd.arg("edit").arg(rt.to_string()).arg(&name);
+                            if !rt.is_cluster_scoped() {
+                                cmd.arg("-n").arg(&ns);
+                            }
+                            let status = cmd.status();
 
                             enable_raw_mode()?;
                             execute!(terminal.backend_mut(), EnterAlternateScreen)?;
                             terminal.clear()?;
                             events.resume();
 
-                            if let Ok(Some(new_yaml)) = edited {
-                                tokio::spawn(async move {
-                                    let guard = mgr.lock().await;
-                                    if let Some(ref manager) = *guard {
-                                        let client = manager.client.clone();
-                                        drop(guard);
-                                        if let Err(e) = k8s::actions::apply_yaml(
-                                            client, &ns, &name, rt, &new_yaml,
-                                        )
-                                        .await
-                                        {
-                                            let _ = action_tx.send(AppEvent::K8sError(
-                                                format!("Apply error: {}", e),
-                                            ));
-                                        }
-                                    }
-                                });
+                            if let Err(e) = status {
+                                let _ = action_tx.send(AppEvent::K8sError(format!(
+                                    "kubectl edit failed: {}",
+                                    e
+                                )));
                             }
                         }
                     }
@@ -969,26 +960,3 @@ fn open_logs_in_less(
     })
 }
 
-fn edit_yaml_in_editor(yaml: &str) -> Result<Option<String>> {
-    use std::io::Write;
-
-    let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
-
-    let mut tmp = tempfile::NamedTempFile::new()?;
-    tmp.write_all(yaml.as_bytes())?;
-    tmp.flush()?;
-
-    let path = tmp.path().to_owned();
-    let status = std::process::Command::new(&editor).arg(&path).status()?;
-
-    if !status.success() {
-        return Ok(None);
-    }
-
-    let new_content = std::fs::read_to_string(&path)?;
-    if new_content == yaml {
-        return Ok(None);
-    }
-
-    Ok(Some(new_content))
-}
