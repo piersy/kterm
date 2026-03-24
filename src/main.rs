@@ -481,27 +481,69 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                             let ns = app.current_namespace().to_string();
                             let action_tx = tx.clone();
 
-                            events.suspend();
-                            disable_raw_mode()?;
-                            execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
-
-                            let mut cmd = std::process::Command::new("kubectl");
-                            cmd.arg("edit").arg(rt.to_string()).arg(&name);
+                            // Fetch YAML while still in TUI (no visible shell gap)
+                            let mut get_cmd = std::process::Command::new("kubectl");
+                            get_cmd.arg("get").arg(rt.to_string()).arg(&name);
                             if !rt.is_cluster_scoped() {
-                                cmd.arg("-n").arg(&ns);
+                                get_cmd.arg("-n").arg(&ns);
                             }
-                            let status = cmd.status();
+                            get_cmd.arg("-o").arg("yaml");
+                            let fetch_result = get_cmd.output();
 
-                            enable_raw_mode()?;
-                            execute!(terminal.backend_mut(), EnterAlternateScreen)?;
-                            terminal.clear()?;
-                            events.resume();
+                            match fetch_result {
+                                Ok(output) if output.status.success() => {
+                                    let yaml = String::from_utf8_lossy(&output.stdout).to_string();
+                                    let yaml = strip_managed_fields(&yaml);
 
-                            if let Err(e) = status {
-                                let _ = action_tx.send(AppEvent::K8sError(format!(
-                                    "kubectl edit failed: {}",
-                                    e
-                                )));
+                                    // Now leave alt screen and open editor (instant)
+                                    events.suspend();
+                                    disable_raw_mode()?;
+                                    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+
+                                    let edit_result = edit_yaml_in_editor(&yaml);
+
+                                    enable_raw_mode()?;
+                                    execute!(terminal.backend_mut(), EnterAlternateScreen)?;
+                                    terminal.clear()?;
+                                    events.resume();
+
+                                    match edit_result {
+                                        Ok(Some(new_yaml)) => {
+                                            match apply_edited_yaml(&new_yaml) {
+                                                Ok(apply_output) => {
+                                                    if !apply_output.status.success() {
+                                                        let stderr = String::from_utf8_lossy(&apply_output.stderr);
+                                                        let _ = action_tx.send(AppEvent::K8sError(
+                                                            format!("Apply failed: {}", stderr.trim()),
+                                                        ));
+                                                    }
+                                                }
+                                                Err(e) => {
+                                                    let _ = action_tx.send(AppEvent::K8sError(
+                                                        format!("Apply error: {}", e),
+                                                    ));
+                                                }
+                                            }
+                                        }
+                                        Ok(None) => {} // No changes or editor failed
+                                        Err(e) => {
+                                            let _ = action_tx.send(AppEvent::K8sError(
+                                                format!("Editor error: {}", e),
+                                            ));
+                                        }
+                                    }
+                                }
+                                Ok(output) => {
+                                    let stderr = String::from_utf8_lossy(&output.stderr);
+                                    let _ = action_tx.send(AppEvent::K8sError(
+                                        format!("kubectl get failed: {}", stderr.trim()),
+                                    ));
+                                }
+                                Err(e) => {
+                                    let _ = action_tx.send(AppEvent::K8sError(
+                                        format!("kubectl get failed: {}", e),
+                                    ));
+                                }
                             }
                         }
                     }
@@ -958,5 +1000,64 @@ fn open_logs_in_less(
         writer_handle: Some(writer_handle),
         path,
     })
+}
+
+fn strip_managed_fields(yaml: &str) -> String {
+    let mut doc: serde_yaml::Value = match serde_yaml::from_str(yaml) {
+        Ok(v) => v,
+        Err(_) => return yaml.to_string(),
+    };
+
+    if let Some(metadata) = doc
+        .as_mapping_mut()
+        .and_then(|m| m.get_mut(&serde_yaml::Value::String("metadata".to_string())))
+        .and_then(|v| v.as_mapping_mut())
+    {
+        metadata.remove(&serde_yaml::Value::String("managedFields".to_string()));
+    }
+
+    serde_yaml::to_string(&doc).unwrap_or_else(|_| yaml.to_string())
+}
+
+/// Open yaml in $EDITOR. Returns Ok(Some(new_content)) if the user made
+/// changes, Ok(None) if unchanged or the editor exited non-zero.
+fn edit_yaml_in_editor(yaml: &str) -> Result<Option<String>> {
+    use std::io::Write;
+
+    let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
+
+    let mut tmp = tempfile::NamedTempFile::with_suffix(".yaml")?;
+    tmp.write_all(yaml.as_bytes())?;
+    tmp.flush()?;
+
+    let path = tmp.path().to_owned();
+    let status = std::process::Command::new(&editor).arg(&path).status()?;
+
+    if !status.success() {
+        return Ok(None);
+    }
+
+    let new_content = std::fs::read_to_string(&path)?;
+    if new_content == yaml {
+        return Ok(None);
+    }
+
+    Ok(Some(new_content))
+}
+
+fn apply_edited_yaml(yaml: &str) -> Result<std::process::Output> {
+    use std::io::Write;
+
+    let mut tmp = tempfile::NamedTempFile::with_suffix(".yaml")?;
+    tmp.write_all(yaml.as_bytes())?;
+    tmp.flush()?;
+
+    let output = std::process::Command::new("kubectl")
+        .arg("apply")
+        .arg("-f")
+        .arg(tmp.path())
+        .output()?;
+
+    Ok(output)
 }
 
