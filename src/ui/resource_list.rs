@@ -102,7 +102,7 @@ fn render_multi_type(frame: &mut Frame, app: &mut App, area: Rect, display_rows:
     // For multi-type display, we use a single table with variable-width columns.
     // Divider rows span the full width. Resource rows use a generic column layout.
     // We use a NAME + STATUS + AGE layout for mixed types.
-    let generic_headers = vec!["TYPE", "NAME", "STATUS", "AGE"];
+    let generic_headers = ["TYPE", "NAME", "STATUS", "AGE"];
     let header_cells: Vec<Cell> = generic_headers
         .iter()
         .map(|h| {
