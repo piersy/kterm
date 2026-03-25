@@ -969,13 +969,26 @@ fn open_logs_in_less(
     })
 }
 
+/// Strip fields that are not useful for editing (like kubectl edit does).
+fn strip_managed_fields(yaml: &str) -> String {
+    if let Ok(mut value) = serde_yaml::from_str::<serde_yaml::Value>(yaml) {
+        if let Some(metadata) = value.get_mut("metadata").and_then(|m| m.as_mapping_mut()) {
+            metadata.remove(serde_yaml::Value::String("managedFields".to_string()));
+        }
+        serde_yaml::to_string(&value).unwrap_or_else(|_| yaml.to_string())
+    } else {
+        yaml.to_string()
+    }
+}
+
 fn edit_yaml_in_editor(yaml: &str) -> Result<Option<String>> {
     use std::io::Write;
 
     let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
+    let cleaned_yaml = strip_managed_fields(yaml);
 
     let mut tmp = tempfile::NamedTempFile::new()?;
-    tmp.write_all(yaml.as_bytes())?;
+    tmp.write_all(cleaned_yaml.as_bytes())?;
     tmp.flush()?;
 
     let path = tmp.path().to_owned();
@@ -986,7 +999,7 @@ fn edit_yaml_in_editor(yaml: &str) -> Result<Option<String>> {
     }
 
     let new_content = std::fs::read_to_string(&path)?;
-    if new_content == yaml {
+    if new_content == cleaned_yaml {
         return Ok(None);
     }
 
