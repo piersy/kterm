@@ -358,7 +358,8 @@ impl App {
         if self.dropdown_filtered.is_empty() {
             self.dropdown_selected = 0;
         } else {
-            self.dropdown_selected = self.dropdown_selected.min(self.dropdown_filtered.len() - 1);
+            self.dropdown_selected =
+                self.dropdown_selected.min(self.dropdown_filtered.len().saturating_sub(1));
         }
     }
 

@@ -1026,4 +1026,49 @@ mod tests {
         app.handle_input(key(KeyCode::Char('j')));
         assert_eq!(app.table_state.selected(), Some(3));
     }
+
+    // --- Dropdown empty filter safety ---
+
+    #[test]
+    fn test_dropdown_filter_empty_results_no_panic() {
+        let mut app = App::new();
+        app.contexts = vec!["ctx-1".to_string(), "ctx-2".to_string()];
+        app.focus = Focus::ResourceList;
+
+        // Open context selector
+        app.handle_input(key(KeyCode::Char('c')));
+        assert!(app.dropdown_visible);
+        assert!(!app.dropdown_filtered.is_empty());
+
+        // Type a query that matches nothing
+        app.dropdown_query = "zzzzzzz_no_match".to_string();
+        app.update_dropdown_filter();
+
+        // Should not panic and dropdown_selected should be 0
+        assert!(app.dropdown_filtered.is_empty());
+        assert_eq!(app.dropdown_selected, 0);
+    }
+
+    #[test]
+    fn test_dropdown_filter_goes_from_results_to_empty() {
+        let mut app = App::new();
+        app.contexts = vec!["alpha".to_string(), "beta".to_string()];
+        app.focus = Focus::ResourceList;
+
+        app.handle_input(key(KeyCode::Char('c')));
+
+        // First filter matches
+        app.dropdown_query = "a".to_string();
+        app.update_dropdown_filter();
+        assert!(!app.dropdown_filtered.is_empty());
+
+        // Navigate to select index 0 (should work)
+        app.dropdown_selected = 0;
+
+        // Now filter to nothing
+        app.dropdown_query = "zzz".to_string();
+        app.update_dropdown_filter();
+        assert!(app.dropdown_filtered.is_empty());
+        assert_eq!(app.dropdown_selected, 0);
+    }
 }
