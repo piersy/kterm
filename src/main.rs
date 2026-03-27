@@ -656,41 +656,6 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                 app.handle_tick();
             }
             AppEvent::Resize(_, _) => {}
-            AppEvent::ResourcesUpdated(items) => {
-                // Determine which resource type these items belong to.
-                // The watcher sends items for a specific type, but the event
-                // doesn't carry the type. We infer from the watcher setup:
-                // each watcher is for one type, and sends updates for that type.
-                // Since we can have multiple watchers, we need the event to carry the type.
-                // For now, store under all selected types if single, or use the event's type.
-                // TODO: The event should carry the resource type. For now, if single type
-                // selected, store there. If multiple, this won't work correctly without
-                // the type in the event. We'll fix this by adding the type to the event.
-
-                // Actually, let's check: the watch_resources function takes a ResourceType
-                // and we need to propagate it. Let's store resources for the primary type
-                // for backwards compat, but we need to fix this properly.
-                // The real fix is in event.rs - add ResourceType to ResourcesUpdated.
-                // For now, we'll handle it via the new ResourcesUpdatedForType event.
-
-                // Legacy fallback: store under primary type
-                let rt = app.primary_resource_type();
-                app.resources_by_type.insert(rt, items);
-                app.loading = false;
-                let rows = app.display_rows();
-                let len = rows.len();
-                if len > 0 {
-                    match app.table_state.selected() {
-                        Some(selected) if selected >= len => {
-                            app.table_state.select(Some(len - 1));
-                        }
-                        None => {
-                            app.select_first_row();
-                        }
-                        _ => {}
-                    }
-                }
-            }
             AppEvent::ResourcesUpdatedForType(rt, items) => {
                 app.resources_by_type.insert(rt, items);
                 app.loading = false;
