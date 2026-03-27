@@ -1,7 +1,8 @@
 use std::collections::BTreeMap;
 use std::fmt::Debug;
+use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{Context as AnyhowContext, Result};
 use futures::{StreamExt, TryStreamExt};
 use k8s_openapi::api::apps::v1::{DaemonSet, Deployment, ReplicaSet, StatefulSet};
 use k8s_openapi::api::autoscaling::v1::HorizontalPodAutoscaler;
@@ -25,6 +26,9 @@ use tokio::sync::mpsc;
 
 use crate::event::AppEvent;
 use crate::types::{ResourceItem, ResourceType};
+
+/// Timeout for K8s API requests (list, get, describe).
+const K8S_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 // ---------------------------------------------------------------------------
 // Generic watch / list / describe helpers
@@ -89,7 +93,10 @@ where
     T: Resource<DynamicType = ()> + Clone + DeserializeOwned + Debug + Send + Sync + 'static,
     F: Fn(&T) -> ResourceItem,
 {
-    let list = api.list(&ListParams::default()).await?;
+    let list = tokio::time::timeout(K8S_REQUEST_TIMEOUT, api.list(&ListParams::default()))
+        .await
+        .context("List request timed out")?
+        .context("List request failed")?;
     Ok(list.items.iter().map(converter).collect())
 }
 
@@ -97,7 +104,10 @@ async fn describe_generic<T>(api: Api<T>, name: &str) -> Result<String>
 where
     T: Resource<DynamicType = ()> + Clone + DeserializeOwned + Debug + Serialize + Send + Sync + 'static,
 {
-    let obj = api.get(name).await?;
+    let obj = tokio::time::timeout(K8S_REQUEST_TIMEOUT, api.get(name))
+        .await
+        .context("Describe request timed out")?
+        .context("Describe request failed")?;
     let mut desc = String::new();
     desc.push_str("\n--- Full YAML ---\n");
     if let Ok(yaml) = serde_yaml::to_string(&obj) {
@@ -452,7 +462,10 @@ async fn count_generic<T>(api: Api<T>) -> Result<usize>
 where
     T: Resource<DynamicType = ()> + Clone + DeserializeOwned + Debug + Send + Sync + 'static,
 {
-    let list = api.list(&ListParams::default()).await?;
+    let list = tokio::time::timeout(K8S_REQUEST_TIMEOUT, api.list(&ListParams::default()))
+        .await
+        .context("Count request timed out")?
+        .context("Count request failed")?;
     Ok(list.items.len())
 }
 
