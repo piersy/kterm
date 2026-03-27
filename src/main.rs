@@ -444,6 +444,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                             let _ = open_logs_in_editor(&app.log_lines);
 
                             enable_raw_mode()?;
+                            terminal.swap_buffers();
                             events.resume();
                         }
                     }
@@ -495,6 +496,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                                 };
 
                             enable_raw_mode()?;
+                            terminal.swap_buffers();
                             events.resume();
 
                             if let Some(c) = cleanup {
@@ -516,6 +518,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                             let edited = edit_yaml_in_editor(&yaml);
 
                             enable_raw_mode()?;
+                            terminal.swap_buffers();
                             events.resume();
 
                             if let Ok(Some(new_yaml)) = edited {
