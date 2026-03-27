@@ -50,10 +50,14 @@ async fn main() -> Result<()> {
 }
 
 /// Abort all current watcher handles and clear the list.
-fn abort_all_watchers(watcher_handles: &mut Vec<tokio::task::JoinHandle<()>>) {
+fn abort_all_watchers(
+    watcher_handles: &mut Vec<tokio::task::JoinHandle<()>>,
+    active_watch_types: &mut std::collections::HashSet<types::ResourceType>,
+) {
     for h in watcher_handles.drain(..) {
         h.abort();
     }
+    active_watch_types.clear();
 }
 
 /// Start watchers for the currently selected resource types.
@@ -64,11 +68,16 @@ fn start_watchers(
     k8s_manager: &std::sync::Arc<tokio::sync::Mutex<Option<k8s::client::K8sManager>>>,
     tx: &tokio::sync::mpsc::UnboundedSender<AppEvent>,
     watcher_handles: &mut Vec<tokio::task::JoinHandle<()>>,
+    active_watch_types: &mut std::collections::HashSet<types::ResourceType>,
 ) {
     let ns = app.current_namespace().to_string();
     let generation = app.generation;
 
     for &rt in &app.selected_resource_types {
+        // Skip if a watcher for this type is already running
+        if !active_watch_types.insert(rt) {
+            continue;
+        }
         let mgr = k8s_manager.clone();
         let action_tx = tx.clone();
         let ns = ns.clone();
@@ -183,6 +192,8 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
 
     // Track ALL watcher/count tasks so they can be properly aborted
     let mut watcher_handles: Vec<tokio::task::JoinHandle<()>> = Vec::new();
+    let mut active_watch_types: std::collections::HashSet<types::ResourceType> =
+        std::collections::HashSet::new();
     let mut log_stream_handle: Option<tokio::task::JoinHandle<()>> = None;
 
     loop {
@@ -207,7 +218,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                         let action_tx = tx.clone();
 
                         app.next_generation();
-                        abort_all_watchers(&mut watcher_handles);
+                        abort_all_watchers(&mut watcher_handles, &mut active_watch_types);
                         if let Some(h) = log_stream_handle.take() {
                             h.abort();
                         }
@@ -255,7 +266,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                     }
                     InputAction::NamespaceChanged => {
                         app.next_generation();
-                        abort_all_watchers(&mut watcher_handles);
+                        abort_all_watchers(&mut watcher_handles, &mut active_watch_types);
                         if let Some(h) = log_stream_handle.take() {
                             h.abort();
                         }
@@ -272,16 +283,16 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                             &ns,
                             &mut watcher_handles,
                         );
-                        start_watchers(&app, &k8s_manager, &tx, &mut watcher_handles);
+                        start_watchers(&app, &k8s_manager, &tx, &mut watcher_handles, &mut active_watch_types);
                     }
                     InputAction::ResourceTypeChanged => {
                         app.next_generation();
-                        abort_all_watchers(&mut watcher_handles);
+                        abort_all_watchers(&mut watcher_handles, &mut active_watch_types);
                         app.loading = true;
                         app.resources_by_type.clear();
                         app.select_first_row();
 
-                        start_watchers(&app, &k8s_manager, &tx, &mut watcher_handles);
+                        start_watchers(&app, &k8s_manager, &tx, &mut watcher_handles, &mut active_watch_types);
                     }
                     InputAction::Describe => {
                         let (name, ns, rt) = {
@@ -761,10 +772,10 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                 }
 
                 // Start initial resource watchers (all tracked)
-                abort_all_watchers(&mut watcher_handles);
+                abort_all_watchers(&mut watcher_handles, &mut active_watch_types);
                 let ns = app.current_namespace().to_string();
                 start_count_fetch(&app, &k8s_manager, &tx, &ns, &mut watcher_handles);
-                start_watchers(&app, &k8s_manager, &tx, &mut watcher_handles);
+                start_watchers(&app, &k8s_manager, &tx, &mut watcher_handles, &mut active_watch_types);
             }
             AppEvent::ResourceCountsLoaded { counts, generation } => {
                 if generation != app.generation {
@@ -781,13 +792,13 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                 // so all handles are tracked.
                 let ns = app.current_namespace().to_string();
                 start_count_fetch(&app, &k8s_manager, &tx, &ns, &mut watcher_handles);
-                start_watchers(&app, &k8s_manager, &tx, &mut watcher_handles);
+                start_watchers(&app, &k8s_manager, &tx, &mut watcher_handles, &mut active_watch_types);
             }
             AppEvent::InitialWatchReady => {
                 // Initial K8s client ready; start watchers from main loop.
                 let ns = app.current_namespace().to_string();
                 start_count_fetch(&app, &k8s_manager, &tx, &ns, &mut watcher_handles);
-                start_watchers(&app, &k8s_manager, &tx, &mut watcher_handles);
+                start_watchers(&app, &k8s_manager, &tx, &mut watcher_handles, &mut active_watch_types);
             }
             AppEvent::K8sError(msg) => {
                 app.set_error(msg);

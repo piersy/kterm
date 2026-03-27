@@ -335,9 +335,11 @@ mod tests {
     async fn test_abort_all_watchers_aborts_all_tasks() {
         use std::sync::Arc;
         use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::collections::HashSet;
 
         let counter = Arc::new(AtomicUsize::new(0));
         let mut handles: Vec<tokio::task::JoinHandle<()>> = Vec::new();
+        let mut active: HashSet<ResourceType> = HashSet::new();
 
         // Spawn 5 long-running tasks
         for _ in 0..5 {
@@ -349,19 +351,23 @@ mod tests {
             });
             handles.push(handle);
         }
+        active.insert(ResourceType::Pods);
 
         // Give tasks time to start
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
         // Abort all
-        crate::abort_all_watchers(&mut handles);
+        crate::abort_all_watchers(&mut handles, &mut active);
 
         assert!(handles.is_empty(), "handles should be drained");
+        assert!(active.is_empty(), "active types should be cleared");
     }
 
     /// Verify that start_watchers tracks all handles properly.
     #[tokio::test]
     async fn test_start_watchers_tracks_all_handles() {
+        use std::collections::HashSet;
+
         let mut app = App::new();
         app.selected_resource_types = vec![
             ResourceType::Pods,
@@ -372,33 +378,65 @@ mod tests {
         let k8s_manager = std::sync::Arc::new(tokio::sync::Mutex::new(None));
         let (tx, _rx) = mpsc::unbounded_channel::<AppEvent>();
         let mut handles: Vec<tokio::task::JoinHandle<()>> = Vec::new();
+        let mut active: HashSet<ResourceType> = HashSet::new();
 
-        crate::start_watchers(&app, &k8s_manager, &tx, &mut handles);
+        crate::start_watchers(&app, &k8s_manager, &tx, &mut handles, &mut active);
 
         // Should have one handle per resource type
         assert_eq!(handles.len(), 3);
+        assert_eq!(active.len(), 3);
 
         // Clean up
-        crate::abort_all_watchers(&mut handles);
+        crate::abort_all_watchers(&mut handles, &mut active);
     }
 
     /// Verify no task leak: after abort, new watchers don't accumulate
     /// old handles.
     #[tokio::test]
     async fn test_no_watcher_leak_on_repeated_starts() {
+        use std::collections::HashSet;
+
         let mut app = App::new();
         app.selected_resource_types = vec![ResourceType::Pods, ResourceType::Deployments];
 
         let k8s_manager = std::sync::Arc::new(tokio::sync::Mutex::new(None));
         let (tx, _rx) = mpsc::unbounded_channel::<AppEvent>();
         let mut handles: Vec<tokio::task::JoinHandle<()>> = Vec::new();
+        let mut active: HashSet<ResourceType> = HashSet::new();
 
         // Start watchers 3 times, aborting between each
         for _ in 0..3 {
-            crate::start_watchers(&app, &k8s_manager, &tx, &mut handles);
+            crate::start_watchers(&app, &k8s_manager, &tx, &mut handles, &mut active);
             assert_eq!(handles.len(), 2);
-            crate::abort_all_watchers(&mut handles);
+            crate::abort_all_watchers(&mut handles, &mut active);
             assert_eq!(handles.len(), 0);
         }
+    }
+
+    /// Verify that starting watchers twice without abort doesn't create
+    /// duplicate watchers for the same resource type.
+    #[tokio::test]
+    async fn test_no_duplicate_watchers_without_abort() {
+        use std::collections::HashSet;
+
+        let mut app = App::new();
+        app.selected_resource_types = vec![ResourceType::Pods, ResourceType::Deployments];
+
+        let k8s_manager = std::sync::Arc::new(tokio::sync::Mutex::new(None));
+        let (tx, _rx) = mpsc::unbounded_channel::<AppEvent>();
+        let mut handles: Vec<tokio::task::JoinHandle<()>> = Vec::new();
+        let mut active: HashSet<ResourceType> = HashSet::new();
+
+        // Start watchers
+        crate::start_watchers(&app, &k8s_manager, &tx, &mut handles, &mut active);
+        assert_eq!(handles.len(), 2);
+
+        // Start again without abort — should not create duplicates
+        crate::start_watchers(&app, &k8s_manager, &tx, &mut handles, &mut active);
+        assert_eq!(handles.len(), 2, "should not create duplicate watchers");
+        assert_eq!(active.len(), 2);
+
+        // Clean up
+        crate::abort_all_watchers(&mut handles, &mut active);
     }
 }
