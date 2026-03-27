@@ -167,8 +167,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                             "Failed to list namespaces: {}",
                             e
                         )));
-                        let _ =
-                            k8s_tx.send(AppEvent::NamespacesLoaded(vec!["default".to_string()]));
+                        event::send_event(&k8s_tx, AppEvent::NamespacesLoaded(vec!["default".to_string()]));
                     }
                 }
 
@@ -790,12 +789,6 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
             AppEvent::ContextSwitchReady => {
                 // Context switch async work is done; start watchers from main loop
                 // so all handles are tracked.
-                let ns = app.current_namespace().to_string();
-                start_count_fetch(&app, &k8s_manager, &tx, &ns, &mut watcher_handles);
-                start_watchers(&app, &k8s_manager, &tx, &mut watcher_handles, &mut active_watch_types);
-            }
-            AppEvent::InitialWatchReady => {
-                // Initial K8s client ready; start watchers from main loop.
                 let ns = app.current_namespace().to_string();
                 start_count_fetch(&app, &k8s_manager, &tx, &ns, &mut watcher_handles);
                 start_watchers(&app, &k8s_manager, &tx, &mut watcher_handles, &mut active_watch_types);

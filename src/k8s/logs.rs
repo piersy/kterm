@@ -12,17 +12,6 @@ use crate::event::{self, AppEvent};
 
 pub const LOG_STREAM_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_log_stream_timeout_is_reasonable() {
-        assert!(LOG_STREAM_CONNECT_TIMEOUT.as_secs() >= 10);
-        assert!(LOG_STREAM_CONNECT_TIMEOUT.as_secs() <= 120);
-    }
-}
-
 pub async fn stream_pod_logs(
     client: Client,
     namespace: &str,
@@ -62,4 +51,15 @@ pub async fn stream_pod_logs(
     event::send_event(&tx, AppEvent::LogStreamEnded);
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_log_stream_timeout_is_reasonable() {
+        assert!(LOG_STREAM_CONNECT_TIMEOUT.as_secs() >= 10);
+        assert!(LOG_STREAM_CONNECT_TIMEOUT.as_secs() <= 120);
+    }
 }

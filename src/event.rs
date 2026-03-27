@@ -45,8 +45,6 @@ pub enum AppEvent {
     },
     /// Context switch completed; main loop should start watchers.
     ContextSwitchReady,
-    /// Initial K8s client ready; main loop should start watchers.
-    InitialWatchReady,
     SearchScanComplete(String),
 }
 

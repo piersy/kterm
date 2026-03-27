@@ -979,7 +979,7 @@ mod tests {
 
     #[test]
     fn test_display_rows_single_type() {
-        let mut app = app_with_pods();
+        let app = app_with_pods();
         let rows = app.display_rows();
         // Single type: no dividers, just resource rows
         assert_eq!(rows.len(), 3);
