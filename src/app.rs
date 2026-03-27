@@ -68,6 +68,9 @@ pub struct App {
     // Cleared for a context when the user explicitly selects it and it connects.
     pub unreachable_contexts: HashSet<String>,
 
+    // Number of cluster probes still in flight at startup.
+    pub cluster_probes_pending: usize,
+
     // Generation counter: incremented on context/namespace/type changes.
     // Used to discard stale watcher events from previous generations.
     pub generation: u64,
@@ -146,6 +149,7 @@ impl App {
 
             resource_counts: HashMap::new(),
             unreachable_contexts: HashSet::new(),
+            cluster_probes_pending: 0,
 
             generation: 0,
 

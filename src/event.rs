@@ -32,6 +32,8 @@ pub enum AppEvent {
         contexts: Vec<String>,
         current: String,
         current_namespace: String,
+        /// Whether the current context successfully connected (listed namespaces).
+        current_reachable: bool,
     },
     K8sError(String),
     SearchResultsBatch {

@@ -158,9 +158,10 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                 let current = manager.current_context.clone();
                 let current_namespace = manager.current_namespace();
 
-                match manager.list_namespaces().await {
+                let current_reachable = match manager.list_namespaces().await {
                     Ok(namespaces) => {
                         event::send_event(&k8s_tx,AppEvent::NamespacesLoaded(namespaces));
+                        true
                     }
                     Err(e) => {
                         event::send_event(&k8s_tx,AppEvent::K8sError(format!(
@@ -168,8 +169,9 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                             e
                         )));
                         event::send_event(&k8s_tx, AppEvent::NamespacesLoaded(vec!["default".to_string()]));
+                        false
                     }
-                }
+                };
 
                 *init_mgr.lock().await = Some(manager);
 
@@ -177,14 +179,39 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                     contexts,
                     current,
                     current_namespace,
+                    current_reachable,
                 });
             }
             Err(e) => {
-                event::send_event(&k8s_tx,AppEvent::K8sError(format!(
-                    "Failed to connect to Kubernetes: {}. Running in offline mode.",
-                    e
-                )));
-                event::send_event(&k8s_tx,AppEvent::NamespacesLoaded(vec!["default".to_string()]));
+                // Try to at least read the kubeconfig for context names
+                let contexts = kube::config::Kubeconfig::read()
+                    .ok()
+                    .map(|kc| kc.contexts.iter().map(|c| c.name.clone()).collect::<Vec<_>>());
+
+                if let Some(contexts) = contexts {
+                    if !contexts.is_empty() {
+                        let current = contexts[0].clone();
+                        event::send_event(&k8s_tx, AppEvent::NamespacesLoaded(vec!["default".to_string()]));
+                        event::send_event(&k8s_tx, AppEvent::ContextsLoaded {
+                            contexts,
+                            current,
+                            current_namespace: "default".to_string(),
+                            current_reachable: false,
+                        });
+                    } else {
+                        event::send_event(&k8s_tx,AppEvent::K8sError(format!(
+                            "Failed to connect to Kubernetes: {}. Running in offline mode.",
+                            e
+                        )));
+                        event::send_event(&k8s_tx,AppEvent::NamespacesLoaded(vec!["default".to_string()]));
+                    }
+                } else {
+                    event::send_event(&k8s_tx,AppEvent::K8sError(format!(
+                        "Failed to connect to Kubernetes: {}. Running in offline mode.",
+                        e
+                    )));
+                    event::send_event(&k8s_tx,AppEvent::NamespacesLoaded(vec!["default".to_string()]));
+                }
             }
         }
     });
@@ -791,6 +818,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                 contexts,
                 current,
                 current_namespace,
+                current_reachable,
             } => {
                 app.contexts = contexts;
                 if let Some(idx) = app.contexts.iter().position(|c| c == &current) {
@@ -808,8 +836,25 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                     app.selected_namespaces.insert(idx);
                 }
 
-                // Probe all non-current clusters for connectivity in the background.
-                // The current cluster is already known reachable (we just connected).
+                // Mark current context unreachable if it failed namespace listing
+                if !current_reachable {
+                    app.unreachable_contexts.insert(current.clone());
+                }
+
+                // Probe all other clusters for connectivity in the background.
+                // If the current cluster is unreachable, it's already marked above
+                // (no need to re-probe since we just tried).
+                let probe_count = app.contexts.iter().filter(|c| c.as_str() != current).count();
+                app.cluster_probes_pending = probe_count;
+
+                // If this is the only context and it's unreachable, show error now
+                if probe_count == 0 && !current_reachable {
+                    app.set_error(
+                        "All clusters are unreachable. Select a cluster to retry connecting."
+                            .to_string(),
+                    );
+                }
+
                 for ctx_name in &app.contexts {
                     if ctx_name == &current {
                         continue;
@@ -888,6 +933,18 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                     app.unreachable_contexts.remove(&context);
                 } else {
                     app.unreachable_contexts.insert(context);
+                }
+                // Track startup probe completion
+                if app.cluster_probes_pending > 0 {
+                    app.cluster_probes_pending -= 1;
+                    if app.cluster_probes_pending == 0
+                        && app.unreachable_contexts.len() >= app.contexts.len()
+                    {
+                        app.set_error(
+                            "All clusters are unreachable. Select a cluster to retry connecting."
+                                .to_string(),
+                        );
+                    }
                 }
                 // Refresh the dropdown if the cluster selector is open
                 if let types::Focus::Selector(types::SelectorTarget::Context) = app.focus {
