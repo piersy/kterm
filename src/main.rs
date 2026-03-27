@@ -443,6 +443,9 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
 
                             let _ = open_logs_in_editor(&app.log_lines);
 
+                            // Editor's LeaveAlternateScreen put us on the main screen;
+                            // re-enter alternate screen so kterm draws there, not on scrollback.
+                            execute!(terminal.backend_mut(), EnterAlternateScreen)?;
                             enable_raw_mode()?;
                             terminal.clear()?;
                             events.resume();
@@ -495,6 +498,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                                     None
                                 };
 
+                            execute!(terminal.backend_mut(), EnterAlternateScreen)?;
                             enable_raw_mode()?;
                             terminal.clear()?;
                             events.resume();
@@ -517,6 +521,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
 
                             let edited = edit_yaml_in_editor(&yaml);
 
+                            execute!(terminal.backend_mut(), EnterAlternateScreen)?;
                             enable_raw_mode()?;
                             terminal.clear()?;
                             events.resume();
