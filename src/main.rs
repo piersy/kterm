@@ -17,7 +17,7 @@ use anyhow::Result;
 use crossterm::event::KeyEventKind;
 use crossterm::execute;
 use crossterm::terminal::{
-    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+    Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
@@ -36,9 +36,9 @@ async fn main() -> Result<()> {
 
     let result = run_app(&mut terminal).await;
 
-    // Terminal teardown
+    // Terminal teardown — clear the alternate screen so it doesn't leak into scrollback
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    execute!(terminal.backend_mut(), Clear(ClearType::All), LeaveAlternateScreen)?;
     terminal.show_cursor()?;
 
     if let Err(e) = result {
