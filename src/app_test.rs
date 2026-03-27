@@ -458,6 +458,25 @@ mod tests {
     }
 
     #[test]
+    fn test_esc_from_search_logs_stops_stream() {
+        use crate::types::SearchResult;
+        let mut app = App::new();
+        app.view_mode = ViewMode::Logs;
+        app.entered_from_search = true;
+        app.search_results = vec![SearchResult {
+            resource: fake_pod("pod-0", "Running"),
+            context: "ctx".to_string(),
+            resource_type: ResourceType::Pods,
+        }];
+        app.search_filtered = vec![0];
+        app.search_table_state.select(Some(0));
+
+        let action = app.handle_input(key(KeyCode::Esc));
+        assert_eq!(action, InputAction::StopLogs);
+        assert_eq!(app.view_mode, ViewMode::Search);
+    }
+
+    #[test]
     fn test_delete_confirm_flow() {
         let mut app = app_with_pods();
 

@@ -183,6 +183,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
 
     // Track ALL watcher/count tasks so they can be properly aborted
     let mut watcher_handles: Vec<tokio::task::JoinHandle<()>> = Vec::new();
+    let mut log_stream_handle: Option<tokio::task::JoinHandle<()>> = None;
 
     loop {
         terminal.draw(|f| ui::render(f, &mut app))?;
@@ -207,6 +208,9 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
 
                         app.next_generation();
                         abort_all_watchers(&mut watcher_handles);
+                        if let Some(h) = log_stream_handle.take() {
+                            h.abort();
+                        }
                         app.loading = true;
                         app.resources_by_type.clear();
 
@@ -252,6 +256,9 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                     InputAction::NamespaceChanged => {
                         app.next_generation();
                         abort_all_watchers(&mut watcher_handles);
+                        if let Some(h) = log_stream_handle.take() {
+                            h.abort();
+                        }
                         app.loading = true;
                         app.resources_by_type.clear();
                         app.resource_counts.clear();
@@ -319,6 +326,11 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                         });
                     }
                     InputAction::StreamLogs => {
+                        // Cancel any existing log stream
+                        if let Some(h) = log_stream_handle.take() {
+                            h.abort();
+                        }
+
                         let name = app.selected_resource_name().unwrap_or_default();
                         let ns = app.current_namespace().to_string();
                         let mgr = k8s_manager.clone();
@@ -326,7 +338,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
 
                         app.loading = true;
 
-                        tokio::spawn(async move {
+                        log_stream_handle = Some(tokio::spawn(async move {
                             let guard = mgr.lock().await;
                             if let Some(ref manager) = *guard {
                                 let client = manager.client.clone();
@@ -340,15 +352,22 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                                 )
                                 .await
                                 {
-                                    event::send_event(&action_tx,AppEvent::K8sError(format!(
-                                        "Log stream error: {}",
-                                        e
-                                    )));
+                                    event::send_event(
+                                        &action_tx,
+                                        AppEvent::K8sError(format!(
+                                            "Log stream error: {}",
+                                            e
+                                        )),
+                                    );
                                 }
                             }
-                        });
+                        }));
                     }
-                    InputAction::StopLogs => {}
+                    InputAction::StopLogs => {
+                        if let Some(h) = log_stream_handle.take() {
+                            h.abort();
+                        }
+                    }
                     InputAction::Delete => {
                         let (name, rt) = {
                             if let Some((res, rt)) = app.selected_resource() {
@@ -617,10 +636,15 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                     }
                     InputAction::SearchStreamLogs => {
                         if let Some(result) = app.selected_search_result().cloned() {
+                            // Cancel any existing log stream
+                            if let Some(h) = log_stream_handle.take() {
+                                h.abort();
+                            }
+
                             let action_tx = tx.clone();
                             app.loading = true;
 
-                            tokio::spawn(async move {
+                            log_stream_handle = Some(tokio::spawn(async move {
                                 match k8s::client::K8sManager::client_for_context(
                                     &result.context,
                                 )
@@ -650,7 +674,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                                         ));
                                     }
                                 }
-                            });
+                            }));
                         }
                     }
                     InputAction::None => {}
