@@ -10,7 +10,7 @@ use tokio::sync::mpsc;
 
 use crate::event::{self, AppEvent};
 
-pub const LOG_STREAM_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+pub const LOG_STREAM_CONNECT_TIMEOUT: Duration = Duration::from_secs(1);
 
 pub async fn stream_pod_logs(
     client: Client,
@@ -36,8 +36,8 @@ pub async fn stream_pod_logs(
         api.log_stream(pod_name, &params),
     )
     .await
-    .context("Log stream connection timed out")?
-    .context("Failed to open log stream")?;
+    .context("log stream timed out (cluster may be unreachable)")?
+    .context("failed to open log stream")?;
 
     let mut lines = stream.lines();
 
@@ -59,7 +59,7 @@ mod tests {
 
     #[test]
     fn test_log_stream_timeout_is_reasonable() {
-        assert!(LOG_STREAM_CONNECT_TIMEOUT.as_secs() >= 10);
-        assert!(LOG_STREAM_CONNECT_TIMEOUT.as_secs() <= 120);
+        assert!(LOG_STREAM_CONNECT_TIMEOUT.as_secs() >= 1);
+        assert!(LOG_STREAM_CONNECT_TIMEOUT.as_secs() <= 5);
     }
 }

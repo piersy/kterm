@@ -551,18 +551,18 @@ mod tests {
     }
 
     #[test]
-    fn test_error_auto_dismiss() {
+    fn test_error_popup_is_modal_no_auto_dismiss() {
         let mut app = App::new();
         app.set_error("test error".to_string());
         assert!(app.error_message.is_some());
+        assert!(app.error_popup);
 
-        for _ in 0..20 {
+        // Even after many ticks, error stays visible (modal)
+        for _ in 0..100 {
             app.handle_tick();
         }
         assert!(app.error_message.is_some());
-
-        app.handle_tick();
-        assert!(app.error_message.is_none());
+        assert!(app.error_popup);
     }
 
     #[test]
@@ -1137,16 +1137,21 @@ mod tests {
     }
 
     #[test]
-    fn test_error_popup_auto_dismiss_on_tick() {
+    fn test_error_popup_requires_key_to_dismiss() {
         let mut app = App::new();
         app.set_error("test error".to_string());
         assert!(app.error_popup);
 
-        for _ in 0..21 {
+        // Ticks alone should not dismiss
+        for _ in 0..100 {
             app.handle_tick();
         }
+        assert!(app.error_popup);
+        assert!(app.error_message.is_some());
+
+        // Key press dismisses
+        app.handle_input(key(KeyCode::Enter));
         assert!(!app.error_popup);
-        assert!(app.error_message.is_none());
     }
 
     #[test]

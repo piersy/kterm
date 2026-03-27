@@ -6,7 +6,7 @@ use kube::api::ListParams;
 use kube::config::{KubeConfigOptions, Kubeconfig};
 use kube::{Api, Client, Config};
 
-const K8S_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+const K8S_REQUEST_TIMEOUT: Duration = Duration::from_secs(1);
 
 pub struct K8sManager {
     kubeconfig: Kubeconfig,
@@ -90,8 +90,8 @@ impl K8sManager {
             ns_api.list(&ListParams::default()),
         )
         .await
-        .context("Namespace list request timed out")?
-        .context("Failed to list namespaces")?;
+        .context("request timed out (cluster may be unreachable)")?
+        .context("API request failed")?;
 
         let mut names: Vec<String> = ns_list
             .items

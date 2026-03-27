@@ -39,9 +39,8 @@ pub struct App {
     pub filter: String,
     pub filter_active: bool,
 
-    // Error popup (dismissible with Esc or auto-dismiss)
+    // Error popup (modal, dismissed with any key)
     pub error_message: Option<String>,
-    pub error_ticks: u8,
     pub error_popup: bool,
 
     // Dropdown selector
@@ -123,7 +122,6 @@ impl App {
             filter_active: false,
 
             error_message: None,
-            error_ticks: 0,
             error_popup: false,
 
             dropdown_query: String::new(),
@@ -447,20 +445,12 @@ impl App {
     }
 
     pub fn handle_tick(&mut self) {
-        if let Some(ref _msg) = self.error_message {
-            self.error_ticks += 1;
-            if self.error_ticks > 20 {
-                self.error_message = None;
-                self.error_ticks = 0;
-                self.error_popup = false;
-            }
-        }
+        // Error popup is modal — no auto-dismiss, user must press a key.
     }
 
     pub fn set_error(&mut self, msg: String) {
         crate::logging::log_error(&msg);
         self.error_message = Some(msg);
-        self.error_ticks = 0;
         self.error_popup = true;
     }
 

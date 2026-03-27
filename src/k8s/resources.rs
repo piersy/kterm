@@ -28,7 +28,7 @@ use crate::event::AppEvent;
 use crate::types::{ResourceItem, ResourceType};
 
 /// Timeout for K8s API requests (list, get, describe).
-const K8S_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+const K8S_REQUEST_TIMEOUT: Duration = Duration::from_secs(1);
 
 // ---------------------------------------------------------------------------
 // Generic watch / list / describe helpers
@@ -95,8 +95,8 @@ where
 {
     let list = tokio::time::timeout(K8S_REQUEST_TIMEOUT, api.list(&ListParams::default()))
         .await
-        .context("List request timed out")?
-        .context("List request failed")?;
+        .context("request timed out (cluster may be unreachable)")?
+        .context("API request failed")?;
     Ok(list.items.iter().map(converter).collect())
 }
 
@@ -106,8 +106,8 @@ where
 {
     let obj = tokio::time::timeout(K8S_REQUEST_TIMEOUT, api.get(name))
         .await
-        .context("Describe request timed out")?
-        .context("Describe request failed")?;
+        .context("request timed out (cluster may be unreachable)")?
+        .context("API request failed")?;
     let mut desc = String::new();
     desc.push_str("\n--- Full YAML ---\n");
     if let Ok(yaml) = serde_yaml::to_string(&obj) {
@@ -464,8 +464,8 @@ where
 {
     let list = tokio::time::timeout(K8S_REQUEST_TIMEOUT, api.list(&ListParams::default()))
         .await
-        .context("Count request timed out")?
-        .context("Count request failed")?;
+        .context("request timed out (cluster may be unreachable)")?
+        .context("API request failed")?;
     Ok(list.items.len())
 }
 
