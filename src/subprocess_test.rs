@@ -325,4 +325,80 @@ mod tests {
         assert_eq!(errors[1], "cycle-1");
         assert_eq!(errors[2], "cycle-2");
     }
+
+    // -----------------------------------------------------------------------
+    // Watcher task tracking tests
+    // -----------------------------------------------------------------------
+
+    /// Verify that abort_all_watchers aborts all tasks in the Vec.
+    #[tokio::test]
+    async fn test_abort_all_watchers_aborts_all_tasks() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let counter = Arc::new(AtomicUsize::new(0));
+        let mut handles: Vec<tokio::task::JoinHandle<()>> = Vec::new();
+
+        // Spawn 5 long-running tasks
+        for _ in 0..5 {
+            let c = counter.clone();
+            let handle = tokio::spawn(async move {
+                c.fetch_add(1, Ordering::SeqCst);
+                // Sleep forever (simulating a watcher)
+                tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+            });
+            handles.push(handle);
+        }
+
+        // Give tasks time to start
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        // Abort all
+        crate::abort_all_watchers(&mut handles);
+
+        assert!(handles.is_empty(), "handles should be drained");
+    }
+
+    /// Verify that start_watchers tracks all handles properly.
+    #[tokio::test]
+    async fn test_start_watchers_tracks_all_handles() {
+        let mut app = App::new();
+        app.selected_resource_types = vec![
+            ResourceType::Pods,
+            ResourceType::Deployments,
+            ResourceType::Services,
+        ];
+
+        let k8s_manager = std::sync::Arc::new(tokio::sync::Mutex::new(None));
+        let (tx, _rx) = mpsc::unbounded_channel::<AppEvent>();
+        let mut handles: Vec<tokio::task::JoinHandle<()>> = Vec::new();
+
+        crate::start_watchers(&app, &k8s_manager, &tx, &mut handles);
+
+        // Should have one handle per resource type
+        assert_eq!(handles.len(), 3);
+
+        // Clean up
+        crate::abort_all_watchers(&mut handles);
+    }
+
+    /// Verify no task leak: after abort, new watchers don't accumulate
+    /// old handles.
+    #[tokio::test]
+    async fn test_no_watcher_leak_on_repeated_starts() {
+        let mut app = App::new();
+        app.selected_resource_types = vec![ResourceType::Pods, ResourceType::Deployments];
+
+        let k8s_manager = std::sync::Arc::new(tokio::sync::Mutex::new(None));
+        let (tx, _rx) = mpsc::unbounded_channel::<AppEvent>();
+        let mut handles: Vec<tokio::task::JoinHandle<()>> = Vec::new();
+
+        // Start watchers 3 times, aborting between each
+        for _ in 0..3 {
+            crate::start_watchers(&app, &k8s_manager, &tx, &mut handles);
+            assert_eq!(handles.len(), 2);
+            crate::abort_all_watchers(&mut handles);
+            assert_eq!(handles.len(), 0);
+        }
+    }
 }

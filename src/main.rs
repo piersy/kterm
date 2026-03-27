@@ -11,7 +11,6 @@ mod ui_test;
 #[cfg(test)]
 mod subprocess_test;
 
-use std::collections::HashMap;
 use std::io;
 
 use anyhow::Result;
@@ -50,21 +49,21 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-/// Abort all current watcher handles and clear the map.
-fn abort_all_watchers(
-    watcher_handles: &mut HashMap<types::ResourceType, tokio::task::JoinHandle<()>>,
-) {
-    for (_, h) in watcher_handles.drain() {
+/// Abort all current watcher handles and clear the list.
+fn abort_all_watchers(watcher_handles: &mut Vec<tokio::task::JoinHandle<()>>) {
+    for h in watcher_handles.drain(..) {
         h.abort();
     }
 }
 
 /// Start watchers for the currently selected resource types.
+/// All spawned tasks are tracked in watcher_handles so they can be
+/// properly aborted on context/namespace/type changes.
 fn start_watchers(
     app: &App,
     k8s_manager: &std::sync::Arc<tokio::sync::Mutex<Option<k8s::client::K8sManager>>>,
     tx: &tokio::sync::mpsc::UnboundedSender<AppEvent>,
-    watcher_handles: &mut HashMap<types::ResourceType, tokio::task::JoinHandle<()>>,
+    watcher_handles: &mut Vec<tokio::task::JoinHandle<()>>,
 ) {
     let ns = app.current_namespace().to_string();
 
@@ -81,12 +80,37 @@ fn start_watchers(
                 if let Err(e) =
                     k8s::resources::watch_resources(client, &ns, rt, action_tx.clone()).await
                 {
-                    event::send_event(&action_tx,AppEvent::K8sError(format!("Watch error: {}", e)));
+                    event::send_event(
+                        &action_tx,
+                        AppEvent::K8sError(format!("Watch error: {}", e)),
+                    );
                 }
             }
         });
-        watcher_handles.insert(rt, handle);
+        watcher_handles.push(handle);
     }
+}
+
+/// Start a resource count fetch task, tracked in watcher_handles.
+fn start_count_fetch(
+    k8s_manager: &std::sync::Arc<tokio::sync::Mutex<Option<k8s::client::K8sManager>>>,
+    tx: &tokio::sync::mpsc::UnboundedSender<AppEvent>,
+    ns: &str,
+    watcher_handles: &mut Vec<tokio::task::JoinHandle<()>>,
+) {
+    let mgr = k8s_manager.clone();
+    let count_tx = tx.clone();
+    let count_ns = ns.to_string();
+    let handle = tokio::spawn(async move {
+        let guard = mgr.lock().await;
+        if let Some(ref manager) = *guard {
+            let client = manager.client.clone();
+            drop(guard);
+            let counts = k8s::resources::count_all_resources(client, &count_ns).await;
+            event::send_event(&count_tx, AppEvent::ResourceCountsLoaded(counts));
+        }
+    });
+    watcher_handles.push(handle);
 }
 
 async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
@@ -141,9 +165,8 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
         }
     });
 
-    // Track watcher tasks per resource type
-    let mut watcher_handles: HashMap<types::ResourceType, tokio::task::JoinHandle<()>> =
-        HashMap::new();
+    // Track ALL watcher/count tasks so they can be properly aborted
+    let mut watcher_handles: Vec<tokio::task::JoinHandle<()>> = Vec::new();
 
     loop {
         terminal.draw(|f| ui::render(f, &mut app))?;
@@ -170,69 +193,44 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                         app.loading = true;
                         app.resources_by_type.clear();
 
-                        let selected_types = app.selected_resource_types.clone();
-                        let ns_pref = app.current_namespace().to_string();
-
+                        // Async context switch + namespace list; then signal main loop
                         let handle = tokio::spawn(async move {
                             let mut guard = mgr.lock().await;
                             if let Some(ref mut manager) = *guard {
                                 if let Err(e) =
                                     manager.switch_context(&context_name).await
                                 {
-                                    event::send_event(&action_tx,AppEvent::K8sError(format!(
-                                        "Failed to switch context: {}",
-                                        e
-                                    )));
+                                    event::send_event(
+                                        &action_tx,
+                                        AppEvent::K8sError(format!(
+                                            "Failed to switch context: {}",
+                                            e
+                                        )),
+                                    );
                                     return;
                                 }
                                 match manager.list_namespaces().await {
                                     Ok(namespaces) => {
-                                        let _ = action_tx
-                                            .send(AppEvent::NamespacesLoaded(namespaces));
+                                        event::send_event(
+                                            &action_tx,
+                                            AppEvent::NamespacesLoaded(namespaces),
+                                        );
                                     }
                                     Err(e) => {
-                                        event::send_event(&action_tx,AppEvent::K8sError(format!(
-                                            "Failed to list namespaces: {}",
-                                            e
-                                        )));
+                                        event::send_event(
+                                            &action_tx,
+                                            AppEvent::K8sError(format!(
+                                                "Failed to list namespaces: {}",
+                                                e
+                                            )),
+                                        );
                                     }
                                 }
-                                let client = manager.client.clone();
-                                drop(guard);
-                                // Count resources
-                                let count_tx = action_tx.clone();
-                                let count_client = client.clone();
-                                let count_ns = ns_pref.clone();
-                                tokio::spawn(async move {
-                                    let counts = k8s::resources::count_all_resources(
-                                        count_client,
-                                        &count_ns,
-                                    )
-                                    .await;
-                                    let _ =
-                                        count_tx.send(AppEvent::ResourceCountsLoaded(counts));
-                                });
-                                // Start watching all selected types
-                                for rt in selected_types {
-                                    let c = client.clone();
-                                    let t = action_tx.clone();
-                                    let n = ns_pref.clone();
-                                    tokio::spawn(async move {
-                                        if let Err(e) =
-                                            k8s::resources::watch_resources(c, &n, rt, t.clone())
-                                                .await
-                                        {
-                                            event::send_event(&t,AppEvent::K8sError(format!(
-                                                "Watch error: {}",
-                                                e
-                                            )));
-                                        }
-                                    });
-                                }
                             }
+                            // Signal main loop to start watchers
+                            event::send_event(&action_tx, AppEvent::ContextSwitchReady);
                         });
-                        // We track via the spawned sub-tasks, but keep the main handle too
-                        watcher_handles.insert(types::ResourceType::Pods, handle);
+                        watcher_handles.push(handle);
                     }
                     InputAction::NamespaceChanged => {
                         abort_all_watchers(&mut watcher_handles);
@@ -241,29 +239,13 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                         app.resource_counts.clear();
                         app.select_first_row();
 
-                        // Start count fetch
-                        let mgr = k8s_manager.clone();
-                        let action_tx = tx.clone();
                         let ns = app.current_namespace().to_string();
-                        {
-                            let count_mgr = mgr.clone();
-                            let count_tx = action_tx.clone();
-                            let count_ns = ns.clone();
-                            tokio::spawn(async move {
-                                let guard = count_mgr.lock().await;
-                                if let Some(ref manager) = *guard {
-                                    let client = manager.client.clone();
-                                    drop(guard);
-                                    let counts = k8s::resources::count_all_resources(
-                                        client, &count_ns,
-                                    )
-                                    .await;
-                                    let _ =
-                                        count_tx.send(AppEvent::ResourceCountsLoaded(counts));
-                                }
-                            });
-                        }
-
+                        start_count_fetch(
+                            &k8s_manager,
+                            &tx,
+                            &ns,
+                            &mut watcher_handles,
+                        );
                         start_watchers(&app, &k8s_manager, &tx, &mut watcher_handles);
                     }
                     InputAction::ResourceTypeChanged => {
@@ -726,48 +708,11 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                     app.selected_namespaces.insert(idx);
                 }
 
-                // Start initial resource watchers
+                // Start initial resource watchers (all tracked)
                 abort_all_watchers(&mut watcher_handles);
-                let mgr = k8s_manager.clone();
-                let action_tx = tx.clone();
                 let ns = app.current_namespace().to_string();
-                let selected_types = app.selected_resource_types.clone();
-                let handle = tokio::spawn(async move {
-                    let guard = mgr.lock().await;
-                    if let Some(ref manager) = *guard {
-                        let client = manager.client.clone();
-                        drop(guard);
-                        // Count resources
-                        let count_tx = action_tx.clone();
-                        let count_client = client.clone();
-                        let count_ns = ns.clone();
-                        tokio::spawn(async move {
-                            let counts = k8s::resources::count_all_resources(
-                                count_client,
-                                &count_ns,
-                            )
-                            .await;
-                            event::send_event(&count_tx,AppEvent::ResourceCountsLoaded(counts));
-                        });
-                        // Start watching all selected types
-                        for rt in selected_types {
-                            let c = client.clone();
-                            let t = action_tx.clone();
-                            let n = ns.clone();
-                            tokio::spawn(async move {
-                                if let Err(e) =
-                                    k8s::resources::watch_resources(c, &n, rt, t.clone()).await
-                                {
-                                    event::send_event(&t,AppEvent::K8sError(format!(
-                                        "Watch error: {}",
-                                        e
-                                    )));
-                                }
-                            });
-                        }
-                    }
-                });
-                watcher_handles.insert(types::ResourceType::Pods, handle);
+                start_count_fetch(&k8s_manager, &tx, &ns, &mut watcher_handles);
+                start_watchers(&app, &k8s_manager, &tx, &mut watcher_handles);
             }
             AppEvent::ResourceCountsLoaded(counts) => {
                 app.resource_counts = counts;
@@ -775,6 +720,19 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                 {
                     app.update_dropdown_filter();
                 }
+            }
+            AppEvent::ContextSwitchReady => {
+                // Context switch async work is done; start watchers from main loop
+                // so all handles are tracked.
+                let ns = app.current_namespace().to_string();
+                start_count_fetch(&k8s_manager, &tx, &ns, &mut watcher_handles);
+                start_watchers(&app, &k8s_manager, &tx, &mut watcher_handles);
+            }
+            AppEvent::InitialWatchReady => {
+                // Initial K8s client ready; start watchers from main loop.
+                let ns = app.current_namespace().to_string();
+                start_count_fetch(&k8s_manager, &tx, &ns, &mut watcher_handles);
+                start_watchers(&app, &k8s_manager, &tx, &mut watcher_handles);
             }
             AppEvent::K8sError(msg) => {
                 app.set_error(msg);

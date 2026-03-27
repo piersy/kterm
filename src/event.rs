@@ -36,6 +36,10 @@ pub enum AppEvent {
         items: Vec<ResourceItem>,
     },
     ResourceCountsLoaded(HashMap<ResourceType, usize>),
+    /// Context switch completed; main loop should start watchers.
+    ContextSwitchReady,
+    /// Initial K8s client ready; main loop should start watchers.
+    InitialWatchReady,
     SearchScanComplete(String),
 }
 
