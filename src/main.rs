@@ -440,12 +440,10 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                         if !app.log_lines.is_empty() {
                             events.suspend();
                             disable_raw_mode()?;
-                            execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
 
                             let _ = open_logs_in_editor(&app.log_lines);
 
                             enable_raw_mode()?;
-                            execute!(terminal.backend_mut(), EnterAlternateScreen)?;
                             terminal.clear()?;
                             events.resume();
                         }
@@ -482,7 +480,6 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
 
                             events.suspend();
                             disable_raw_mode()?;
-                            execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
 
                             let cleanup =
                                 if let Some((client, ns, pod_name)) = client_and_pod {
@@ -499,7 +496,6 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                                 };
 
                             enable_raw_mode()?;
-                            execute!(terminal.backend_mut(), EnterAlternateScreen)?;
                             terminal.clear()?;
                             events.resume();
 
@@ -518,12 +514,10 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
 
                             events.suspend();
                             disable_raw_mode()?;
-                            execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
 
                             let edited = edit_yaml_in_editor(&yaml);
 
                             enable_raw_mode()?;
-                            execute!(terminal.backend_mut(), EnterAlternateScreen)?;
                             terminal.clear()?;
                             events.resume();
 
