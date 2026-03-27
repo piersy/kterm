@@ -46,6 +46,11 @@ pub enum AppEvent {
     /// Context switch completed; main loop should start watchers.
     ContextSwitchReady,
     SearchScanComplete(String),
+    /// Result of probing a cluster for connectivity at startup.
+    ClusterProbeResult {
+        context: String,
+        reachable: bool,
+    },
 }
 
 pub struct EventHandler {

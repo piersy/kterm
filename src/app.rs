@@ -63,6 +63,11 @@ pub struct App {
     // Resource counts per type (for dropdown display)
     pub resource_counts: HashMap<ResourceType, usize>,
 
+    // Clusters that failed connectivity probes at startup (or on switch).
+    // These are excluded from search and shown as "(unreachable)" in the UI.
+    // Cleared for a context when the user explicitly selects it and it connects.
+    pub unreachable_contexts: HashSet<String>,
+
     // Generation counter: incremented on context/namespace/type changes.
     // Used to discard stale watcher events from previous generations.
     pub generation: u64,
@@ -140,6 +145,7 @@ impl App {
             entered_from_search: false,
 
             resource_counts: HashMap::new(),
+            unreachable_contexts: HashSet::new(),
 
             generation: 0,
 
@@ -283,7 +289,17 @@ impl App {
     /// Returns the list of items for the currently active selector.
     pub fn dropdown_items(&self) -> Vec<String> {
         match self.focus {
-            Focus::Selector(SelectorTarget::Context) => self.contexts.clone(),
+            Focus::Selector(SelectorTarget::Context) => self
+                .contexts
+                .iter()
+                .map(|c| {
+                    if self.unreachable_contexts.contains(c) {
+                        format!("{} (unreachable)", c)
+                    } else {
+                        c.clone()
+                    }
+                })
+                .collect(),
             Focus::Selector(SelectorTarget::Namespace) => self.namespaces.clone(),
             Focus::Selector(SelectorTarget::ResourceType) => {
                 self.visible_resource_types()

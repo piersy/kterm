@@ -224,7 +224,9 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                         app.loading = true;
                         app.resources_by_type.clear();
 
-                        // Async context switch + namespace list; then signal main loop
+                        // Async context switch + namespace list; then signal main loop.
+                        // On success, mark the cluster as reachable (clears unreachable status).
+                        let ctx_for_probe = context_name.clone();
                         let handle = tokio::spawn(async move {
                             let mut guard = mgr.lock().await;
                             if let Some(ref mut manager) = *guard {
@@ -238,6 +240,13 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                                             e
                                         )),
                                     );
+                                    event::send_event(
+                                        &action_tx,
+                                        AppEvent::ClusterProbeResult {
+                                            context: ctx_for_probe,
+                                            reachable: false,
+                                        },
+                                    );
                                     return;
                                 }
                                 match manager.list_namespaces().await {
@@ -245,6 +254,14 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                                         event::send_event(
                                             &action_tx,
                                             AppEvent::NamespacesLoaded(namespaces),
+                                        );
+                                        // Successfully connected — mark reachable
+                                        event::send_event(
+                                            &action_tx,
+                                            AppEvent::ClusterProbeResult {
+                                                context: ctx_for_probe,
+                                                reachable: true,
+                                            },
                                         );
                                     }
                                     Err(e) => {
@@ -254,6 +271,13 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                                                 "Failed to list namespaces: {}",
                                                 e
                                             )),
+                                        );
+                                        event::send_event(
+                                            &action_tx,
+                                            AppEvent::ClusterProbeResult {
+                                                context: ctx_for_probe,
+                                                reachable: false,
+                                            },
                                         );
                                     }
                                 }
@@ -548,53 +572,68 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                     }
                     InputAction::StartSearch => {
                         let contexts = app.contexts.clone();
-                        app.search_contexts_total = contexts.len();
-                        app.search_contexts_done = 0;
+                        let unreachable = app.unreachable_contexts.clone();
 
-                        for context in contexts {
-                            let ctx = context.clone();
-                            let search_tx = tx.clone();
-                            tokio::spawn(async move {
-                                match k8s::client::K8sManager::client_for_context(&ctx).await
-                                {
-                                    Ok(client) => {
-                                        for rt in types::ResourceType::ALL.iter() {
-                                            let rt = *rt;
-                                            match k8s::resources::list_all_resources(
-                                                client.clone(),
-                                                rt,
-                                            )
-                                            .await
-                                            {
-                                                Ok(items) => {
-                                                    event::send_event(&search_tx,
-                                                        AppEvent::SearchResultsBatch {
-                                                            context: ctx.clone(),
-                                                            resource_type: rt,
-                                                            items,
-                                                        },
-                                                    );
-                                                }
-                                                Err(e) => {
-                                                    event::send_event(&search_tx,
-                                                        AppEvent::K8sError(format!(
-                                                            "Search {}/{}: {}",
-                                                            ctx, rt, e
-                                                        )),
-                                                    );
+                        // Filter out unreachable clusters from search
+                        let reachable_contexts: Vec<String> = contexts
+                            .into_iter()
+                            .filter(|c| !unreachable.contains(c))
+                            .collect();
+
+                        if reachable_contexts.is_empty() {
+                            app.set_error(
+                                "All clusters are unreachable. Select a cluster to retry connecting.".to_string(),
+                            );
+                            app.search_loading = false;
+                        } else {
+                            app.search_contexts_total = reachable_contexts.len();
+                            app.search_contexts_done = 0;
+
+                            for context in reachable_contexts {
+                                let ctx = context.clone();
+                                let search_tx = tx.clone();
+                                tokio::spawn(async move {
+                                    match k8s::client::K8sManager::client_for_context(&ctx).await
+                                    {
+                                        Ok(client) => {
+                                            for rt in types::ResourceType::ALL.iter() {
+                                                let rt = *rt;
+                                                match k8s::resources::list_all_resources(
+                                                    client.clone(),
+                                                    rt,
+                                                )
+                                                .await
+                                                {
+                                                    Ok(items) => {
+                                                        event::send_event(&search_tx,
+                                                            AppEvent::SearchResultsBatch {
+                                                                context: ctx.clone(),
+                                                                resource_type: rt,
+                                                                items,
+                                                            },
+                                                        );
+                                                    }
+                                                    Err(e) => {
+                                                        event::send_event(&search_tx,
+                                                            AppEvent::K8sError(format!(
+                                                                "Search {}/{}: {}",
+                                                                ctx, rt, e
+                                                            )),
+                                                        );
+                                                    }
                                                 }
                                             }
                                         }
+                                        Err(e) => {
+                                            event::send_event(&search_tx,AppEvent::K8sError(
+                                                format!("Connect to {}: {}", ctx, e),
+                                            ));
+                                        }
                                     }
-                                    Err(e) => {
-                                        event::send_event(&search_tx,AppEvent::K8sError(
-                                            format!("Connect to {}: {}", ctx, e),
-                                        ));
-                                    }
-                                }
-                                let _ = search_tx
-                                    .send(AppEvent::SearchScanComplete(ctx));
-                            });
+                                    let _ = search_tx
+                                        .send(AppEvent::SearchScanComplete(ctx));
+                                });
+                            }
                         }
                     }
                     InputAction::SearchDescribe => {
@@ -769,6 +808,38 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                     app.selected_namespaces.insert(idx);
                 }
 
+                // Probe all non-current clusters for connectivity in the background.
+                // The current cluster is already known reachable (we just connected).
+                for ctx_name in &app.contexts {
+                    if ctx_name == &current {
+                        continue;
+                    }
+                    let probe_ctx = ctx_name.clone();
+                    let probe_tx = tx.clone();
+                    tokio::spawn(async move {
+                        let reachable = match k8s::client::K8sManager::client_for_context(&probe_ctx).await {
+                            Ok(client) => {
+                                let ns_api: kube::Api<k8s_openapi::api::core::v1::Namespace> =
+                                    kube::Api::all(client);
+                                tokio::time::timeout(
+                                    std::time::Duration::from_secs(3),
+                                    ns_api.list(&kube::api::ListParams::default().limit(1)),
+                                )
+                                .await
+                                .is_ok_and(|r| r.is_ok())
+                            }
+                            Err(_) => false,
+                        };
+                        event::send_event(
+                            &probe_tx,
+                            AppEvent::ClusterProbeResult {
+                                context: probe_ctx,
+                                reachable,
+                            },
+                        );
+                    });
+                }
+
                 // Start initial resource watchers (all tracked)
                 abort_all_watchers(&mut watcher_handles, &mut active_watch_types);
                 let ns = app.current_namespace().to_string();
@@ -810,6 +881,17 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                         });
                     }
                     app.update_search_filter();
+                }
+            }
+            AppEvent::ClusterProbeResult { context, reachable } => {
+                if reachable {
+                    app.unreachable_contexts.remove(&context);
+                } else {
+                    app.unreachable_contexts.insert(context);
+                }
+                // Refresh the dropdown if the cluster selector is open
+                if let types::Focus::Selector(types::SelectorTarget::Context) = app.focus {
+                    app.update_dropdown_filter();
                 }
             }
             AppEvent::SearchScanComplete(_context) => {

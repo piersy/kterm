@@ -47,10 +47,17 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn selected_context_names(app: &App) -> String {
-    let mut names: Vec<&str> = app
+    let mut names: Vec<String> = app
         .selected_contexts
         .iter()
-        .filter_map(|&idx| app.contexts.get(idx).map(|s| s.as_str()))
+        .filter_map(|&idx| app.contexts.get(idx))
+        .map(|name| {
+            if app.unreachable_contexts.contains(name) {
+                format!("{} (unreachable)", name)
+            } else {
+                name.clone()
+            }
+        })
         .collect();
     names.sort();
     if names.is_empty() {

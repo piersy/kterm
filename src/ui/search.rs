@@ -60,14 +60,31 @@ fn render_search_results(frame: &mut Frame, app: &mut App, area: Rect) {
         })
         .collect();
 
+    let skipped = app.unreachable_contexts.len();
     let title = if app.search_loading {
         let done = app.search_contexts_done;
         let total = app.search_contexts_total;
+        if skipped > 0 {
+            format!(
+                " Results ({} found, scanning {}/{} clusters, {} unreachable) ",
+                app.search_filtered.len(),
+                done,
+                total,
+                skipped,
+            )
+        } else {
+            format!(
+                " Results ({} found, scanning {}/{} clusters...) ",
+                app.search_filtered.len(),
+                done,
+                total
+            )
+        }
+    } else if skipped > 0 {
         format!(
-            " Results ({} found, scanning {}/{} clusters...) ",
+            " Results ({} found, {} clusters unreachable) ",
             app.search_filtered.len(),
-            done,
-            total
+            skipped,
         )
     } else {
         format!(" Results ({} found) ", app.search_filtered.len())
