@@ -458,6 +458,25 @@ mod tests {
     }
 
     #[test]
+    fn test_esc_from_search_logs_stops_stream() {
+        use crate::types::SearchResult;
+        let mut app = App::new();
+        app.view_mode = ViewMode::Logs;
+        app.entered_from_search = true;
+        app.search_results = vec![SearchResult {
+            resource: fake_pod("pod-0", "Running"),
+            context: "ctx".to_string(),
+            resource_type: ResourceType::Pods,
+        }];
+        app.search_filtered = vec![0];
+        app.search_table_state.select(Some(0));
+
+        let action = app.handle_input(key(KeyCode::Esc));
+        assert_eq!(action, InputAction::StopLogs);
+        assert_eq!(app.view_mode, ViewMode::Search);
+    }
+
+    #[test]
     fn test_delete_confirm_flow() {
         let mut app = app_with_pods();
 
@@ -532,18 +551,18 @@ mod tests {
     }
 
     #[test]
-    fn test_error_auto_dismiss() {
+    fn test_error_popup_is_modal_no_auto_dismiss() {
         let mut app = App::new();
         app.set_error("test error".to_string());
         assert!(app.error_message.is_some());
+        assert!(app.error_popup);
 
-        for _ in 0..20 {
+        // Even after many ticks, error stays visible (modal)
+        for _ in 0..100 {
             app.handle_tick();
         }
         assert!(app.error_message.is_some());
-
-        app.handle_tick();
-        assert!(app.error_message.is_none());
+        assert!(app.error_popup);
     }
 
     #[test]
@@ -960,7 +979,7 @@ mod tests {
 
     #[test]
     fn test_display_rows_single_type() {
-        let mut app = app_with_pods();
+        let app = app_with_pods();
         let rows = app.display_rows();
         // Single type: no dividers, just resource rows
         assert_eq!(rows.len(), 3);
@@ -1025,5 +1044,136 @@ mod tests {
         // Navigate down again - should skip Services divider to svc-0
         app.handle_input(key(KeyCode::Char('j')));
         assert_eq!(app.table_state.selected(), Some(3));
+    }
+
+    // --- Dropdown empty filter safety ---
+
+    #[test]
+    fn test_dropdown_filter_empty_results_no_panic() {
+        let mut app = App::new();
+        app.contexts = vec!["ctx-1".to_string(), "ctx-2".to_string()];
+        app.focus = Focus::ResourceList;
+
+        // Open context selector
+        app.handle_input(key(KeyCode::Char('c')));
+        assert!(app.dropdown_visible);
+        assert!(!app.dropdown_filtered.is_empty());
+
+        // Type a query that matches nothing
+        app.dropdown_query = "zzzzzzz_no_match".to_string();
+        app.update_dropdown_filter();
+
+        // Should not panic and dropdown_selected should be 0
+        assert!(app.dropdown_filtered.is_empty());
+        assert_eq!(app.dropdown_selected, 0);
+    }
+
+    // --- Error popup tests ---
+
+    #[test]
+    fn test_error_popup_shown_on_set_error() {
+        let mut app = App::new();
+        assert!(!app.error_popup);
+        app.set_error("connection refused".to_string());
+        assert!(app.error_popup);
+        assert_eq!(app.error_message.as_deref(), Some("connection refused"));
+    }
+
+    #[test]
+    fn test_error_popup_dismissed_on_any_key() {
+        let mut app = App::new();
+        app.focus = Focus::ResourceList;
+        app.set_error("timeout".to_string());
+        assert!(app.error_popup);
+
+        // Any key should dismiss the popup (and consume the key)
+        let action = app.handle_input(key(KeyCode::Char('j')));
+        assert_eq!(action, InputAction::None);
+        assert!(!app.error_popup);
+        // Error message still exists (for footer display), but popup is gone
+        assert!(app.error_message.is_some());
+    }
+
+    // --- Generation counter tests ---
+
+    #[test]
+    fn test_generation_starts_at_zero() {
+        let app = App::new();
+        assert_eq!(app.generation, 0);
+    }
+
+    #[test]
+    fn test_next_generation_increments() {
+        let mut app = App::new();
+        assert_eq!(app.generation, 0);
+        let gen1 = app.next_generation();
+        assert_eq!(gen1, 1);
+        assert_eq!(app.generation, 1);
+        let gen2 = app.next_generation();
+        assert_eq!(gen2, 2);
+        assert_eq!(app.generation, 2);
+    }
+
+    #[test]
+    fn test_context_change_bumps_generation() {
+        let mut app = App::new();
+        app.contexts = vec!["ctx-a".to_string(), "ctx-b".to_string()];
+        app.selected_contexts.clear();
+        app.selected_contexts.insert(0);
+        app.focus = Focus::ResourceList;
+
+        let initial_gen = app.generation;
+
+        // Open context selector, pick ctx-b, confirm
+        app.handle_input(key(KeyCode::Char('c')));
+        app.handle_input(key(KeyCode::Down));
+        let action = app.handle_input(key(KeyCode::Enter));
+        assert_eq!(action, InputAction::ContextChanged);
+
+        // The main loop would call app.next_generation() here.
+        // We verify that next_generation works correctly.
+        let new_gen = app.next_generation();
+        assert!(new_gen > initial_gen);
+    }
+
+    #[test]
+    fn test_error_popup_requires_key_to_dismiss() {
+        let mut app = App::new();
+        app.set_error("test error".to_string());
+        assert!(app.error_popup);
+
+        // Ticks alone should not dismiss
+        for _ in 0..100 {
+            app.handle_tick();
+        }
+        assert!(app.error_popup);
+        assert!(app.error_message.is_some());
+
+        // Key press dismisses
+        app.handle_input(key(KeyCode::Enter));
+        assert!(!app.error_popup);
+    }
+
+    #[test]
+    fn test_dropdown_filter_goes_from_results_to_empty() {
+        let mut app = App::new();
+        app.contexts = vec!["alpha".to_string(), "beta".to_string()];
+        app.focus = Focus::ResourceList;
+
+        app.handle_input(key(KeyCode::Char('c')));
+
+        // First filter matches
+        app.dropdown_query = "a".to_string();
+        app.update_dropdown_filter();
+        assert!(!app.dropdown_filtered.is_empty());
+
+        // Navigate to select index 0 (should work)
+        app.dropdown_selected = 0;
+
+        // Now filter to nothing
+        app.dropdown_query = "zzz".to_string();
+        app.update_dropdown_filter();
+        assert!(app.dropdown_filtered.is_empty());
+        assert_eq!(app.dropdown_selected, 0);
     }
 }

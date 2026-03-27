@@ -6,15 +6,24 @@ use std::collections::HashMap;
 
 use crate::types::{ResourceItem, ResourceType};
 
+/// Send an event, logging a warning if the channel is closed.
+pub fn send_event(tx: &mpsc::UnboundedSender<AppEvent>, event: AppEvent) {
+    if tx.send(event).is_err() {
+        crate::logging::log_error("Event channel closed, failed to send event");
+    }
+}
+
 #[derive(Debug)]
 pub enum AppEvent {
     Key(KeyEvent),
     #[allow(dead_code)]
     Resize(u16, u16),
     Tick,
-    #[allow(dead_code)]
-    ResourcesUpdated(Vec<ResourceItem>),
-    ResourcesUpdatedForType(ResourceType, Vec<ResourceItem>),
+    ResourcesUpdatedForType {
+        resource_type: ResourceType,
+        items: Vec<ResourceItem>,
+        generation: u64,
+    },
     NamespacesLoaded(Vec<String>),
     DetailLoaded(String),
     LogLine(String),
@@ -30,7 +39,12 @@ pub enum AppEvent {
         resource_type: ResourceType,
         items: Vec<ResourceItem>,
     },
-    ResourceCountsLoaded(HashMap<ResourceType, usize>),
+    ResourceCountsLoaded {
+        counts: HashMap<ResourceType, usize>,
+        generation: u64,
+    },
+    /// Context switch completed; main loop should start watchers.
+    ContextSwitchReady,
     SearchScanComplete(String),
 }
 
@@ -101,7 +115,7 @@ impl EventHandler {
             }
         }
         for event in kept {
-            let _ = self.tx.send(event);
+            send_event(&self.tx, event);
         }
     }
 

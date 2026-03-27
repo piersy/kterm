@@ -1,8 +1,12 @@
+use std::time::Duration;
+
 use anyhow::{Context, Result};
 use k8s_openapi::api::core::v1::Namespace;
 use kube::api::ListParams;
 use kube::config::{KubeConfigOptions, Kubeconfig};
 use kube::{Api, Client, Config};
+
+const K8S_REQUEST_TIMEOUT: Duration = Duration::from_secs(1);
 
 pub struct K8sManager {
     kubeconfig: Kubeconfig,
@@ -81,10 +85,13 @@ impl K8sManager {
 
     pub async fn list_namespaces(&self) -> Result<Vec<String>> {
         let ns_api: Api<Namespace> = Api::all(self.client.clone());
-        let ns_list = ns_api
-            .list(&ListParams::default())
-            .await
-            .context("Failed to list namespaces")?;
+        let ns_list = tokio::time::timeout(
+            K8S_REQUEST_TIMEOUT,
+            ns_api.list(&ListParams::default()),
+        )
+        .await
+        .context("request timed out (cluster may be unreachable)")?
+        .context("API request failed")?;
 
         let mut names: Vec<String> = ns_list
             .items

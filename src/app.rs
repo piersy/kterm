@@ -39,9 +39,9 @@ pub struct App {
     pub filter: String,
     pub filter_active: bool,
 
-    // Error
+    // Error popup (modal, dismissed with any key)
     pub error_message: Option<String>,
-    pub error_ticks: u8,
+    pub error_popup: bool,
 
     // Dropdown selector
     pub dropdown_query: String,
@@ -62,6 +62,10 @@ pub struct App {
 
     // Resource counts per type (for dropdown display)
     pub resource_counts: HashMap<ResourceType, usize>,
+
+    // Generation counter: incremented on context/namespace/type changes.
+    // Used to discard stale watcher events from previous generations.
+    pub generation: u64,
 
     // Quit
     pub should_quit: bool,
@@ -118,7 +122,7 @@ impl App {
             filter_active: false,
 
             error_message: None,
-            error_ticks: 0,
+            error_popup: false,
 
             dropdown_query: String::new(),
             dropdown_filtered: Vec::new(),
@@ -136,6 +140,8 @@ impl App {
             entered_from_search: false,
 
             resource_counts: HashMap::new(),
+
+            generation: 0,
 
             should_quit: false,
         }
@@ -358,7 +364,8 @@ impl App {
         if self.dropdown_filtered.is_empty() {
             self.dropdown_selected = 0;
         } else {
-            self.dropdown_selected = self.dropdown_selected.min(self.dropdown_filtered.len() - 1);
+            self.dropdown_selected =
+                self.dropdown_selected.min(self.dropdown_filtered.len().saturating_sub(1));
         }
     }
 
@@ -438,24 +445,35 @@ impl App {
     }
 
     pub fn handle_tick(&mut self) {
-        if let Some(ref _msg) = self.error_message {
-            self.error_ticks += 1;
-            if self.error_ticks > 20 {
-                self.error_message = None;
-                self.error_ticks = 0;
-            }
-        }
+        // Error popup is modal — no auto-dismiss, user must press a key.
     }
 
     pub fn set_error(&mut self, msg: String) {
+        crate::logging::log_error(&msg);
         self.error_message = Some(msg);
-        self.error_ticks = 0;
+        self.error_popup = true;
+    }
+
+    pub fn dismiss_error_popup(&mut self) {
+        self.error_popup = false;
+    }
+
+    /// Increment the generation counter, invalidating all in-flight events.
+    pub fn next_generation(&mut self) -> u64 {
+        self.generation += 1;
+        self.generation
     }
 
     pub fn handle_input(&mut self, key: KeyEvent) -> InputAction {
         // Global quit
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
             self.should_quit = true;
+            return InputAction::None;
+        }
+
+        // Dismiss error popup on any key
+        if self.error_popup {
+            self.dismiss_error_popup();
             return InputAction::None;
         }
 

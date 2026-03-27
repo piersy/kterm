@@ -3,6 +3,7 @@ mod app;
 mod app_test;
 mod event;
 mod k8s;
+mod logging;
 mod types;
 mod ui;
 #[cfg(test)]
@@ -10,14 +11,13 @@ mod ui_test;
 #[cfg(test)]
 mod subprocess_test;
 
-use std::collections::HashMap;
 use std::io;
 
 use anyhow::Result;
 use crossterm::event::KeyEventKind;
 use crossterm::execute;
 use crossterm::terminal::{
-    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+    Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
@@ -36,9 +36,9 @@ async fn main() -> Result<()> {
 
     let result = run_app(&mut terminal).await;
 
-    // Terminal teardown
+    // Terminal teardown — clear the alternate screen so it doesn't leak into scrollback
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    execute!(terminal.backend_mut(), Clear(ClearType::All), LeaveAlternateScreen)?;
     terminal.show_cursor()?;
 
     if let Err(e) = result {
@@ -49,25 +49,35 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-/// Abort all current watcher handles and clear the map.
+/// Abort all current watcher handles and clear the list.
 fn abort_all_watchers(
-    watcher_handles: &mut HashMap<types::ResourceType, tokio::task::JoinHandle<()>>,
+    watcher_handles: &mut Vec<tokio::task::JoinHandle<()>>,
+    active_watch_types: &mut std::collections::HashSet<types::ResourceType>,
 ) {
-    for (_, h) in watcher_handles.drain() {
+    for h in watcher_handles.drain(..) {
         h.abort();
     }
+    active_watch_types.clear();
 }
 
 /// Start watchers for the currently selected resource types.
+/// All spawned tasks are tracked in watcher_handles so they can be
+/// properly aborted on context/namespace/type changes.
 fn start_watchers(
     app: &App,
     k8s_manager: &std::sync::Arc<tokio::sync::Mutex<Option<k8s::client::K8sManager>>>,
     tx: &tokio::sync::mpsc::UnboundedSender<AppEvent>,
-    watcher_handles: &mut HashMap<types::ResourceType, tokio::task::JoinHandle<()>>,
+    watcher_handles: &mut Vec<tokio::task::JoinHandle<()>>,
+    active_watch_types: &mut std::collections::HashSet<types::ResourceType>,
 ) {
     let ns = app.current_namespace().to_string();
+    let generation = app.generation;
 
     for &rt in &app.selected_resource_types {
+        // Skip if a watcher for this type is already running
+        if !active_watch_types.insert(rt) {
+            continue;
+        }
         let mgr = k8s_manager.clone();
         let action_tx = tx.clone();
         let ns = ns.clone();
@@ -78,17 +88,58 @@ fn start_watchers(
                 let client = manager.client.clone();
                 drop(guard);
                 if let Err(e) =
-                    k8s::resources::watch_resources(client, &ns, rt, action_tx.clone()).await
+                    k8s::resources::watch_resources(
+                        client,
+                        &ns,
+                        rt,
+                        generation,
+                        action_tx.clone(),
+                    )
+                    .await
                 {
-                    let _ = action_tx.send(AppEvent::K8sError(format!("Watch error: {}", e)));
+                    event::send_event(
+                        &action_tx,
+                        AppEvent::K8sError(format!("Watch error: {}", e)),
+                    );
                 }
             }
         });
-        watcher_handles.insert(rt, handle);
+        watcher_handles.push(handle);
     }
 }
 
+/// Start a resource count fetch task, tracked in watcher_handles.
+fn start_count_fetch(
+    app: &App,
+    k8s_manager: &std::sync::Arc<tokio::sync::Mutex<Option<k8s::client::K8sManager>>>,
+    tx: &tokio::sync::mpsc::UnboundedSender<AppEvent>,
+    ns: &str,
+    watcher_handles: &mut Vec<tokio::task::JoinHandle<()>>,
+) {
+    let mgr = k8s_manager.clone();
+    let count_tx = tx.clone();
+    let count_ns = ns.to_string();
+    let generation = app.generation;
+    let handle = tokio::spawn(async move {
+        let guard = mgr.lock().await;
+        if let Some(ref manager) = *guard {
+            let client = manager.client.clone();
+            drop(guard);
+            let counts = k8s::resources::count_all_resources(client, &count_ns).await;
+            event::send_event(
+                &count_tx,
+                AppEvent::ResourceCountsLoaded {
+                    counts,
+                    generation,
+                },
+            );
+        }
+    });
+    watcher_handles.push(handle);
+}
+
 async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
+    logging::init();
     let mut app = App::new();
     let mut events = EventHandler::new();
     let tx = events.sender();
@@ -109,39 +160,40 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
 
                 match manager.list_namespaces().await {
                     Ok(namespaces) => {
-                        let _ = k8s_tx.send(AppEvent::NamespacesLoaded(namespaces));
+                        event::send_event(&k8s_tx,AppEvent::NamespacesLoaded(namespaces));
                     }
                     Err(e) => {
-                        let _ = k8s_tx.send(AppEvent::K8sError(format!(
+                        event::send_event(&k8s_tx,AppEvent::K8sError(format!(
                             "Failed to list namespaces: {}",
                             e
                         )));
-                        let _ =
-                            k8s_tx.send(AppEvent::NamespacesLoaded(vec!["default".to_string()]));
+                        event::send_event(&k8s_tx, AppEvent::NamespacesLoaded(vec!["default".to_string()]));
                     }
                 }
 
                 *init_mgr.lock().await = Some(manager);
 
-                let _ = k8s_tx.send(AppEvent::ContextsLoaded {
+                event::send_event(&k8s_tx,AppEvent::ContextsLoaded {
                     contexts,
                     current,
                     current_namespace,
                 });
             }
             Err(e) => {
-                let _ = k8s_tx.send(AppEvent::K8sError(format!(
+                event::send_event(&k8s_tx,AppEvent::K8sError(format!(
                     "Failed to connect to Kubernetes: {}. Running in offline mode.",
                     e
                 )));
-                let _ = k8s_tx.send(AppEvent::NamespacesLoaded(vec!["default".to_string()]));
+                event::send_event(&k8s_tx,AppEvent::NamespacesLoaded(vec!["default".to_string()]));
             }
         }
     });
 
-    // Track watcher tasks per resource type
-    let mut watcher_handles: HashMap<types::ResourceType, tokio::task::JoinHandle<()>> =
-        HashMap::new();
+    // Track ALL watcher/count tasks so they can be properly aborted
+    let mut watcher_handles: Vec<tokio::task::JoinHandle<()>> = Vec::new();
+    let mut active_watch_types: std::collections::HashSet<types::ResourceType> =
+        std::collections::HashSet::new();
+    let mut log_stream_handle: Option<tokio::task::JoinHandle<()>> = None;
 
     loop {
         terminal.draw(|f| ui::render(f, &mut app))?;
@@ -164,113 +216,82 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                         let mgr = k8s_manager.clone();
                         let action_tx = tx.clone();
 
-                        abort_all_watchers(&mut watcher_handles);
+                        app.next_generation();
+                        abort_all_watchers(&mut watcher_handles, &mut active_watch_types);
+                        if let Some(h) = log_stream_handle.take() {
+                            h.abort();
+                        }
                         app.loading = true;
                         app.resources_by_type.clear();
 
-                        let selected_types = app.selected_resource_types.clone();
-                        let ns_pref = app.current_namespace().to_string();
-
+                        // Async context switch + namespace list; then signal main loop
                         let handle = tokio::spawn(async move {
                             let mut guard = mgr.lock().await;
                             if let Some(ref mut manager) = *guard {
                                 if let Err(e) =
                                     manager.switch_context(&context_name).await
                                 {
-                                    let _ = action_tx.send(AppEvent::K8sError(format!(
-                                        "Failed to switch context: {}",
-                                        e
-                                    )));
+                                    event::send_event(
+                                        &action_tx,
+                                        AppEvent::K8sError(format!(
+                                            "Failed to switch context: {}",
+                                            e
+                                        )),
+                                    );
                                     return;
                                 }
                                 match manager.list_namespaces().await {
                                     Ok(namespaces) => {
-                                        let _ = action_tx
-                                            .send(AppEvent::NamespacesLoaded(namespaces));
+                                        event::send_event(
+                                            &action_tx,
+                                            AppEvent::NamespacesLoaded(namespaces),
+                                        );
                                     }
                                     Err(e) => {
-                                        let _ = action_tx.send(AppEvent::K8sError(format!(
-                                            "Failed to list namespaces: {}",
-                                            e
-                                        )));
+                                        event::send_event(
+                                            &action_tx,
+                                            AppEvent::K8sError(format!(
+                                                "Failed to list namespaces: {}",
+                                                e
+                                            )),
+                                        );
                                     }
                                 }
-                                let client = manager.client.clone();
-                                drop(guard);
-                                // Count resources
-                                let count_tx = action_tx.clone();
-                                let count_client = client.clone();
-                                let count_ns = ns_pref.clone();
-                                tokio::spawn(async move {
-                                    let counts = k8s::resources::count_all_resources(
-                                        count_client,
-                                        &count_ns,
-                                    )
-                                    .await;
-                                    let _ =
-                                        count_tx.send(AppEvent::ResourceCountsLoaded(counts));
-                                });
-                                // Start watching all selected types
-                                for rt in selected_types {
-                                    let c = client.clone();
-                                    let t = action_tx.clone();
-                                    let n = ns_pref.clone();
-                                    tokio::spawn(async move {
-                                        if let Err(e) =
-                                            k8s::resources::watch_resources(c, &n, rt, t.clone())
-                                                .await
-                                        {
-                                            let _ = t.send(AppEvent::K8sError(format!(
-                                                "Watch error: {}",
-                                                e
-                                            )));
-                                        }
-                                    });
-                                }
                             }
+                            // Signal main loop to start watchers
+                            event::send_event(&action_tx, AppEvent::ContextSwitchReady);
                         });
-                        // We track via the spawned sub-tasks, but keep the main handle too
-                        watcher_handles.insert(types::ResourceType::Pods, handle);
+                        watcher_handles.push(handle);
                     }
                     InputAction::NamespaceChanged => {
-                        abort_all_watchers(&mut watcher_handles);
+                        app.next_generation();
+                        abort_all_watchers(&mut watcher_handles, &mut active_watch_types);
+                        if let Some(h) = log_stream_handle.take() {
+                            h.abort();
+                        }
                         app.loading = true;
                         app.resources_by_type.clear();
                         app.resource_counts.clear();
                         app.select_first_row();
 
-                        // Start count fetch
-                        let mgr = k8s_manager.clone();
-                        let action_tx = tx.clone();
                         let ns = app.current_namespace().to_string();
-                        {
-                            let count_mgr = mgr.clone();
-                            let count_tx = action_tx.clone();
-                            let count_ns = ns.clone();
-                            tokio::spawn(async move {
-                                let guard = count_mgr.lock().await;
-                                if let Some(ref manager) = *guard {
-                                    let client = manager.client.clone();
-                                    drop(guard);
-                                    let counts = k8s::resources::count_all_resources(
-                                        client, &count_ns,
-                                    )
-                                    .await;
-                                    let _ =
-                                        count_tx.send(AppEvent::ResourceCountsLoaded(counts));
-                                }
-                            });
-                        }
-
-                        start_watchers(&app, &k8s_manager, &tx, &mut watcher_handles);
+                        start_count_fetch(
+                            &app,
+                            &k8s_manager,
+                            &tx,
+                            &ns,
+                            &mut watcher_handles,
+                        );
+                        start_watchers(&app, &k8s_manager, &tx, &mut watcher_handles, &mut active_watch_types);
                     }
                     InputAction::ResourceTypeChanged => {
-                        abort_all_watchers(&mut watcher_handles);
+                        app.next_generation();
+                        abort_all_watchers(&mut watcher_handles, &mut active_watch_types);
                         app.loading = true;
                         app.resources_by_type.clear();
                         app.select_first_row();
 
-                        start_watchers(&app, &k8s_manager, &tx, &mut watcher_handles);
+                        start_watchers(&app, &k8s_manager, &tx, &mut watcher_handles, &mut active_watch_types);
                     }
                     InputAction::Describe => {
                         let (name, ns, rt) = {
@@ -306,7 +327,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                                             action_tx.send(AppEvent::DetailLoaded(desc));
                                     }
                                     Err(e) => {
-                                        let _ = action_tx.send(AppEvent::K8sError(
+                                        event::send_event(&action_tx,AppEvent::K8sError(
                                             format!("Describe error: {}", e),
                                         ));
                                     }
@@ -315,6 +336,11 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                         });
                     }
                     InputAction::StreamLogs => {
+                        // Cancel any existing log stream
+                        if let Some(h) = log_stream_handle.take() {
+                            h.abort();
+                        }
+
                         let name = app.selected_resource_name().unwrap_or_default();
                         let ns = app.current_namespace().to_string();
                         let mgr = k8s_manager.clone();
@@ -322,7 +348,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
 
                         app.loading = true;
 
-                        tokio::spawn(async move {
+                        log_stream_handle = Some(tokio::spawn(async move {
                             let guard = mgr.lock().await;
                             if let Some(ref manager) = *guard {
                                 let client = manager.client.clone();
@@ -336,15 +362,22 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                                 )
                                 .await
                                 {
-                                    let _ = action_tx.send(AppEvent::K8sError(format!(
-                                        "Log stream error: {}",
-                                        e
-                                    )));
+                                    event::send_event(
+                                        &action_tx,
+                                        AppEvent::K8sError(format!(
+                                            "Log stream error: {}",
+                                            e
+                                        )),
+                                    );
                                 }
                             }
-                        });
+                        }));
                     }
-                    InputAction::StopLogs => {}
+                    InputAction::StopLogs => {
+                        if let Some(h) = log_stream_handle.take() {
+                            h.abort();
+                        }
+                    }
                     InputAction::Delete => {
                         let (name, rt) = {
                             if let Some((res, rt)) = app.selected_resource() {
@@ -366,7 +399,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                                     k8s::actions::delete_resource(client, &ns, &name, rt)
                                         .await
                                 {
-                                    let _ = action_tx.send(AppEvent::K8sError(format!(
+                                    event::send_event(&action_tx,AppEvent::K8sError(format!(
                                         "Delete error: {}",
                                         e
                                     )));
@@ -395,7 +428,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                                     k8s::actions::restart_resource(client, &ns, &name, rt)
                                         .await
                                 {
-                                    let _ = action_tx.send(AppEvent::K8sError(format!(
+                                    event::send_event(&action_tx,AppEvent::K8sError(format!(
                                         "Restart error: {}",
                                         e
                                     )));
@@ -407,12 +440,13 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                         if !app.log_lines.is_empty() {
                             events.suspend();
                             disable_raw_mode()?;
-                            execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
 
                             let _ = open_logs_in_editor(&app.log_lines);
 
-                            enable_raw_mode()?;
+                            // Editor's LeaveAlternateScreen put us on the main screen;
+                            // re-enter alternate screen so kterm draws there, not on scrollback.
                             execute!(terminal.backend_mut(), EnterAlternateScreen)?;
+                            enable_raw_mode()?;
                             terminal.clear()?;
                             events.resume();
                         }
@@ -449,7 +483,6 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
 
                             events.suspend();
                             disable_raw_mode()?;
-                            execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
 
                             let cleanup =
                                 if let Some((client, ns, pod_name)) = client_and_pod {
@@ -465,8 +498,8 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                                     None
                                 };
 
-                            enable_raw_mode()?;
                             execute!(terminal.backend_mut(), EnterAlternateScreen)?;
+                            enable_raw_mode()?;
                             terminal.clear()?;
                             events.resume();
 
@@ -485,12 +518,11 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
 
                             events.suspend();
                             disable_raw_mode()?;
-                            execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
 
                             let edited = edit_yaml_in_editor(&yaml);
 
-                            enable_raw_mode()?;
                             execute!(terminal.backend_mut(), EnterAlternateScreen)?;
+                            enable_raw_mode()?;
                             terminal.clear()?;
                             events.resume();
 
@@ -505,7 +537,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                                         )
                                         .await
                                         {
-                                            let _ = action_tx.send(AppEvent::K8sError(
+                                            event::send_event(&action_tx,AppEvent::K8sError(
                                                 format!("Apply error: {}", e),
                                             ));
                                         }
@@ -535,7 +567,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                                             .await
                                             {
                                                 Ok(items) => {
-                                                    let _ = search_tx.send(
+                                                    event::send_event(&search_tx,
                                                         AppEvent::SearchResultsBatch {
                                                             context: ctx.clone(),
                                                             resource_type: rt,
@@ -544,7 +576,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                                                     );
                                                 }
                                                 Err(e) => {
-                                                    let _ = search_tx.send(
+                                                    event::send_event(&search_tx,
                                                         AppEvent::K8sError(format!(
                                                             "Search {}/{}: {}",
                                                             ctx, rt, e
@@ -555,7 +587,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                                         }
                                     }
                                     Err(e) => {
-                                        let _ = search_tx.send(AppEvent::K8sError(
+                                        event::send_event(&search_tx,AppEvent::K8sError(
                                             format!("Connect to {}: {}", ctx, e),
                                         ));
                                     }
@@ -590,7 +622,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                                                     .send(AppEvent::DetailLoaded(desc));
                                             }
                                             Err(e) => {
-                                                let _ = action_tx.send(
+                                                event::send_event(&action_tx,
                                                     AppEvent::K8sError(format!(
                                                         "Describe error: {}",
                                                         e
@@ -600,7 +632,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                                         }
                                     }
                                     Err(e) => {
-                                        let _ = action_tx.send(AppEvent::K8sError(
+                                        event::send_event(&action_tx,AppEvent::K8sError(
                                             format!(
                                                 "Connect to {}: {}",
                                                 result.context, e
@@ -613,10 +645,15 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                     }
                     InputAction::SearchStreamLogs => {
                         if let Some(result) = app.selected_search_result().cloned() {
+                            // Cancel any existing log stream
+                            if let Some(h) = log_stream_handle.take() {
+                                h.abort();
+                            }
+
                             let action_tx = tx.clone();
                             app.loading = true;
 
-                            tokio::spawn(async move {
+                            log_stream_handle = Some(tokio::spawn(async move {
                                 match k8s::client::K8sManager::client_for_context(
                                     &result.context,
                                 )
@@ -632,13 +669,13 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                                         )
                                         .await
                                         {
-                                            let _ = action_tx.send(AppEvent::K8sError(
+                                            event::send_event(&action_tx,AppEvent::K8sError(
                                                 format!("Log stream error: {}", e),
                                             ));
                                         }
                                     }
                                     Err(e) => {
-                                        let _ = action_tx.send(AppEvent::K8sError(
+                                        event::send_event(&action_tx,AppEvent::K8sError(
                                             format!(
                                                 "Connect to {}: {}",
                                                 result.context, e
@@ -646,7 +683,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                                         ));
                                     }
                                 }
-                            });
+                            }));
                         }
                     }
                     InputAction::None => {}
@@ -656,42 +693,15 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                 app.handle_tick();
             }
             AppEvent::Resize(_, _) => {}
-            AppEvent::ResourcesUpdated(items) => {
-                // Determine which resource type these items belong to.
-                // The watcher sends items for a specific type, but the event
-                // doesn't carry the type. We infer from the watcher setup:
-                // each watcher is for one type, and sends updates for that type.
-                // Since we can have multiple watchers, we need the event to carry the type.
-                // For now, store under all selected types if single, or use the event's type.
-                // TODO: The event should carry the resource type. For now, if single type
-                // selected, store there. If multiple, this won't work correctly without
-                // the type in the event. We'll fix this by adding the type to the event.
-
-                // Actually, let's check: the watch_resources function takes a ResourceType
-                // and we need to propagate it. Let's store resources for the primary type
-                // for backwards compat, but we need to fix this properly.
-                // The real fix is in event.rs - add ResourceType to ResourcesUpdated.
-                // For now, we'll handle it via the new ResourcesUpdatedForType event.
-
-                // Legacy fallback: store under primary type
-                let rt = app.primary_resource_type();
-                app.resources_by_type.insert(rt, items);
-                app.loading = false;
-                let rows = app.display_rows();
-                let len = rows.len();
-                if len > 0 {
-                    match app.table_state.selected() {
-                        Some(selected) if selected >= len => {
-                            app.table_state.select(Some(len - 1));
-                        }
-                        None => {
-                            app.select_first_row();
-                        }
-                        _ => {}
-                    }
+            AppEvent::ResourcesUpdatedForType {
+                resource_type: rt,
+                items,
+                generation,
+            } => {
+                // Discard stale events from a previous generation
+                if generation != app.generation {
+                    continue;
                 }
-            }
-            AppEvent::ResourcesUpdatedForType(rt, items) => {
                 app.resources_by_type.insert(rt, items);
                 app.loading = false;
                 let rows = app.display_rows();
@@ -759,55 +769,28 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                     app.selected_namespaces.insert(idx);
                 }
 
-                // Start initial resource watchers
-                abort_all_watchers(&mut watcher_handles);
-                let mgr = k8s_manager.clone();
-                let action_tx = tx.clone();
+                // Start initial resource watchers (all tracked)
+                abort_all_watchers(&mut watcher_handles, &mut active_watch_types);
                 let ns = app.current_namespace().to_string();
-                let selected_types = app.selected_resource_types.clone();
-                let handle = tokio::spawn(async move {
-                    let guard = mgr.lock().await;
-                    if let Some(ref manager) = *guard {
-                        let client = manager.client.clone();
-                        drop(guard);
-                        // Count resources
-                        let count_tx = action_tx.clone();
-                        let count_client = client.clone();
-                        let count_ns = ns.clone();
-                        tokio::spawn(async move {
-                            let counts = k8s::resources::count_all_resources(
-                                count_client,
-                                &count_ns,
-                            )
-                            .await;
-                            let _ = count_tx.send(AppEvent::ResourceCountsLoaded(counts));
-                        });
-                        // Start watching all selected types
-                        for rt in selected_types {
-                            let c = client.clone();
-                            let t = action_tx.clone();
-                            let n = ns.clone();
-                            tokio::spawn(async move {
-                                if let Err(e) =
-                                    k8s::resources::watch_resources(c, &n, rt, t.clone()).await
-                                {
-                                    let _ = t.send(AppEvent::K8sError(format!(
-                                        "Watch error: {}",
-                                        e
-                                    )));
-                                }
-                            });
-                        }
-                    }
-                });
-                watcher_handles.insert(types::ResourceType::Pods, handle);
+                start_count_fetch(&app, &k8s_manager, &tx, &ns, &mut watcher_handles);
+                start_watchers(&app, &k8s_manager, &tx, &mut watcher_handles, &mut active_watch_types);
             }
-            AppEvent::ResourceCountsLoaded(counts) => {
+            AppEvent::ResourceCountsLoaded { counts, generation } => {
+                if generation != app.generation {
+                    continue;
+                }
                 app.resource_counts = counts;
                 if let types::Focus::Selector(types::SelectorTarget::ResourceType) = app.focus
                 {
                     app.update_dropdown_filter();
                 }
+            }
+            AppEvent::ContextSwitchReady => {
+                // Context switch async work is done; start watchers from main loop
+                // so all handles are tracked.
+                let ns = app.current_namespace().to_string();
+                start_count_fetch(&app, &k8s_manager, &tx, &ns, &mut watcher_handles);
+                start_watchers(&app, &k8s_manager, &tx, &mut watcher_handles, &mut active_watch_types);
             }
             AppEvent::K8sError(msg) => {
                 app.set_error(msg);
