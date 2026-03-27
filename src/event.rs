@@ -19,7 +19,11 @@ pub enum AppEvent {
     #[allow(dead_code)]
     Resize(u16, u16),
     Tick,
-    ResourcesUpdatedForType(ResourceType, Vec<ResourceItem>),
+    ResourcesUpdatedForType {
+        resource_type: ResourceType,
+        items: Vec<ResourceItem>,
+        generation: u64,
+    },
     NamespacesLoaded(Vec<String>),
     DetailLoaded(String),
     LogLine(String),
@@ -35,7 +39,10 @@ pub enum AppEvent {
         resource_type: ResourceType,
         items: Vec<ResourceItem>,
     },
-    ResourceCountsLoaded(HashMap<ResourceType, usize>),
+    ResourceCountsLoaded {
+        counts: HashMap<ResourceType, usize>,
+        generation: u64,
+    },
     /// Context switch completed; main loop should start watchers.
     ContextSwitchReady,
     /// Initial K8s client ready; main loop should start watchers.

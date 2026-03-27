@@ -64,6 +64,10 @@ pub struct App {
     // Resource counts per type (for dropdown display)
     pub resource_counts: HashMap<ResourceType, usize>,
 
+    // Generation counter: incremented on context/namespace/type changes.
+    // Used to discard stale watcher events from previous generations.
+    pub generation: u64,
+
     // Quit
     pub should_quit: bool,
 }
@@ -138,6 +142,8 @@ impl App {
             entered_from_search: false,
 
             resource_counts: HashMap::new(),
+
+            generation: 0,
 
             should_quit: false,
         }
@@ -460,6 +466,12 @@ impl App {
 
     pub fn dismiss_error_popup(&mut self) {
         self.error_popup = false;
+    }
+
+    /// Increment the generation counter, invalidating all in-flight events.
+    pub fn next_generation(&mut self) -> u64 {
+        self.generation += 1;
+        self.generation
     }
 
     pub fn handle_input(&mut self, key: KeyEvent) -> InputAction {

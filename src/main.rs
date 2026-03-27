@@ -66,6 +66,7 @@ fn start_watchers(
     watcher_handles: &mut Vec<tokio::task::JoinHandle<()>>,
 ) {
     let ns = app.current_namespace().to_string();
+    let generation = app.generation;
 
     for &rt in &app.selected_resource_types {
         let mgr = k8s_manager.clone();
@@ -78,7 +79,14 @@ fn start_watchers(
                 let client = manager.client.clone();
                 drop(guard);
                 if let Err(e) =
-                    k8s::resources::watch_resources(client, &ns, rt, action_tx.clone()).await
+                    k8s::resources::watch_resources(
+                        client,
+                        &ns,
+                        rt,
+                        generation,
+                        action_tx.clone(),
+                    )
+                    .await
                 {
                     event::send_event(
                         &action_tx,
@@ -93,6 +101,7 @@ fn start_watchers(
 
 /// Start a resource count fetch task, tracked in watcher_handles.
 fn start_count_fetch(
+    app: &App,
     k8s_manager: &std::sync::Arc<tokio::sync::Mutex<Option<k8s::client::K8sManager>>>,
     tx: &tokio::sync::mpsc::UnboundedSender<AppEvent>,
     ns: &str,
@@ -101,13 +110,20 @@ fn start_count_fetch(
     let mgr = k8s_manager.clone();
     let count_tx = tx.clone();
     let count_ns = ns.to_string();
+    let generation = app.generation;
     let handle = tokio::spawn(async move {
         let guard = mgr.lock().await;
         if let Some(ref manager) = *guard {
             let client = manager.client.clone();
             drop(guard);
             let counts = k8s::resources::count_all_resources(client, &count_ns).await;
-            event::send_event(&count_tx, AppEvent::ResourceCountsLoaded(counts));
+            event::send_event(
+                &count_tx,
+                AppEvent::ResourceCountsLoaded {
+                    counts,
+                    generation,
+                },
+            );
         }
     });
     watcher_handles.push(handle);
@@ -189,6 +205,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                         let mgr = k8s_manager.clone();
                         let action_tx = tx.clone();
 
+                        app.next_generation();
                         abort_all_watchers(&mut watcher_handles);
                         app.loading = true;
                         app.resources_by_type.clear();
@@ -233,6 +250,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                         watcher_handles.push(handle);
                     }
                     InputAction::NamespaceChanged => {
+                        app.next_generation();
                         abort_all_watchers(&mut watcher_handles);
                         app.loading = true;
                         app.resources_by_type.clear();
@@ -241,6 +259,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
 
                         let ns = app.current_namespace().to_string();
                         start_count_fetch(
+                            &app,
                             &k8s_manager,
                             &tx,
                             &ns,
@@ -249,6 +268,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                         start_watchers(&app, &k8s_manager, &tx, &mut watcher_handles);
                     }
                     InputAction::ResourceTypeChanged => {
+                        app.next_generation();
                         abort_all_watchers(&mut watcher_handles);
                         app.loading = true;
                         app.resources_by_type.clear();
@@ -640,7 +660,15 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                 app.handle_tick();
             }
             AppEvent::Resize(_, _) => {}
-            AppEvent::ResourcesUpdatedForType(rt, items) => {
+            AppEvent::ResourcesUpdatedForType {
+                resource_type: rt,
+                items,
+                generation,
+            } => {
+                // Discard stale events from a previous generation
+                if generation != app.generation {
+                    continue;
+                }
                 app.resources_by_type.insert(rt, items);
                 app.loading = false;
                 let rows = app.display_rows();
@@ -711,10 +739,13 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                 // Start initial resource watchers (all tracked)
                 abort_all_watchers(&mut watcher_handles);
                 let ns = app.current_namespace().to_string();
-                start_count_fetch(&k8s_manager, &tx, &ns, &mut watcher_handles);
+                start_count_fetch(&app, &k8s_manager, &tx, &ns, &mut watcher_handles);
                 start_watchers(&app, &k8s_manager, &tx, &mut watcher_handles);
             }
-            AppEvent::ResourceCountsLoaded(counts) => {
+            AppEvent::ResourceCountsLoaded { counts, generation } => {
+                if generation != app.generation {
+                    continue;
+                }
                 app.resource_counts = counts;
                 if let types::Focus::Selector(types::SelectorTarget::ResourceType) = app.focus
                 {
@@ -725,13 +756,13 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                 // Context switch async work is done; start watchers from main loop
                 // so all handles are tracked.
                 let ns = app.current_namespace().to_string();
-                start_count_fetch(&k8s_manager, &tx, &ns, &mut watcher_handles);
+                start_count_fetch(&app, &k8s_manager, &tx, &ns, &mut watcher_handles);
                 start_watchers(&app, &k8s_manager, &tx, &mut watcher_handles);
             }
             AppEvent::InitialWatchReady => {
                 // Initial K8s client ready; start watchers from main loop.
                 let ns = app.current_namespace().to_string();
-                start_count_fetch(&k8s_manager, &tx, &ns, &mut watcher_handles);
+                start_count_fetch(&app, &k8s_manager, &tx, &ns, &mut watcher_handles);
                 start_watchers(&app, &k8s_manager, &tx, &mut watcher_handles);
             }
             AppEvent::K8sError(msg) => {

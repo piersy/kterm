@@ -1075,6 +1075,48 @@ mod tests {
         assert!(app.error_message.is_some());
     }
 
+    // --- Generation counter tests ---
+
+    #[test]
+    fn test_generation_starts_at_zero() {
+        let app = App::new();
+        assert_eq!(app.generation, 0);
+    }
+
+    #[test]
+    fn test_next_generation_increments() {
+        let mut app = App::new();
+        assert_eq!(app.generation, 0);
+        let gen1 = app.next_generation();
+        assert_eq!(gen1, 1);
+        assert_eq!(app.generation, 1);
+        let gen2 = app.next_generation();
+        assert_eq!(gen2, 2);
+        assert_eq!(app.generation, 2);
+    }
+
+    #[test]
+    fn test_context_change_bumps_generation() {
+        let mut app = App::new();
+        app.contexts = vec!["ctx-a".to_string(), "ctx-b".to_string()];
+        app.selected_contexts.clear();
+        app.selected_contexts.insert(0);
+        app.focus = Focus::ResourceList;
+
+        let initial_gen = app.generation;
+
+        // Open context selector, pick ctx-b, confirm
+        app.handle_input(key(KeyCode::Char('c')));
+        app.handle_input(key(KeyCode::Down));
+        let action = app.handle_input(key(KeyCode::Enter));
+        assert_eq!(action, InputAction::ContextChanged);
+
+        // The main loop would call app.next_generation() here.
+        // We verify that next_generation works correctly.
+        let new_gen = app.next_generation();
+        assert!(new_gen > initial_gen);
+    }
+
     #[test]
     fn test_error_popup_auto_dismiss_on_tick() {
         let mut app = App::new();

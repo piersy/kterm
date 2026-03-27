@@ -34,6 +34,7 @@ async fn watch_generic<T, F>(
     api: Api<T>,
     tx: mpsc::UnboundedSender<AppEvent>,
     rt: ResourceType,
+    generation: u64,
     converter: F,
 ) -> Result<()>
 where
@@ -67,7 +68,14 @@ where
         }
 
         let items: Vec<ResourceItem> = cache.values().map(&converter).collect();
-        if tx.send(AppEvent::ResourcesUpdatedForType(rt, items)).is_err() {
+        if tx
+            .send(AppEvent::ResourcesUpdatedForType {
+                resource_type: rt,
+                items,
+                generation,
+            })
+            .is_err()
+        {
             crate::logging::log_error(&format!("Watcher for {}: event channel closed", rt));
             break;
         }
@@ -106,18 +114,20 @@ pub async fn watch_resources(
     client: Client,
     namespace: &str,
     resource_type: ResourceType,
+    generation: u64,
     tx: mpsc::UnboundedSender<AppEvent>,
 ) -> Result<()> {
     let rt = resource_type;
     match resource_type {
         ResourceType::Pods => {
-            watch_generic(Api::<Pod>::namespaced(client, namespace), tx, rt, pod_to_resource_item).await
+            watch_generic(Api::<Pod>::namespaced(client, namespace), tx, rt, generation, pod_to_resource_item).await
         }
         ResourceType::Deployments => {
             watch_generic(
                 Api::<Deployment>::namespaced(client, namespace),
                 tx,
                 rt,
+                generation,
                 deployment_to_resource_item,
             )
             .await
@@ -127,6 +137,7 @@ pub async fn watch_resources(
                 Api::<StatefulSet>::namespaced(client, namespace),
                 tx,
                 rt,
+                generation,
                 statefulset_to_resource_item,
             )
             .await
@@ -136,6 +147,7 @@ pub async fn watch_resources(
                 Api::<DaemonSet>::namespaced(client, namespace),
                 tx,
                 rt,
+                generation,
                 daemonset_to_resource_item,
             )
             .await
@@ -145,6 +157,7 @@ pub async fn watch_resources(
                 Api::<ReplicaSet>::namespaced(client, namespace),
                 tx,
                 rt,
+                generation,
                 replicaset_to_resource_item,
             )
             .await
@@ -154,18 +167,20 @@ pub async fn watch_resources(
                 Api::<ReplicationController>::namespaced(client, namespace),
                 tx,
                 rt,
+                generation,
                 replication_controller_to_resource_item,
             )
             .await
         }
         ResourceType::Jobs => {
-            watch_generic(Api::<Job>::namespaced(client, namespace), tx, rt, job_to_resource_item).await
+            watch_generic(Api::<Job>::namespaced(client, namespace), tx, rt, generation, job_to_resource_item).await
         }
         ResourceType::CronJobs => {
             watch_generic(
                 Api::<CronJob>::namespaced(client, namespace),
                 tx,
                 rt,
+                generation,
                 cronjob_to_resource_item,
             )
             .await
@@ -175,6 +190,7 @@ pub async fn watch_resources(
                 Api::<HorizontalPodAutoscaler>::namespaced(client, namespace),
                 tx,
                 rt,
+                generation,
                 hpa_to_resource_item,
             )
             .await
@@ -184,6 +200,7 @@ pub async fn watch_resources(
                 Api::<Service>::namespaced(client, namespace),
                 tx,
                 rt,
+                generation,
                 service_to_resource_item,
             )
             .await
@@ -193,6 +210,7 @@ pub async fn watch_resources(
                 Api::<Endpoints>::namespaced(client, namespace),
                 tx,
                 rt,
+                generation,
                 endpoints_to_resource_item,
             )
             .await
@@ -202,6 +220,7 @@ pub async fn watch_resources(
                 Api::<Ingress>::namespaced(client, namespace),
                 tx,
                 rt,
+                generation,
                 ingress_to_resource_item,
             )
             .await
@@ -211,6 +230,7 @@ pub async fn watch_resources(
                 Api::<NetworkPolicy>::namespaced(client, namespace),
                 tx,
                 rt,
+                generation,
                 network_policy_to_resource_item,
             )
             .await
@@ -220,6 +240,7 @@ pub async fn watch_resources(
                 Api::<ConfigMap>::namespaced(client, namespace),
                 tx,
                 rt,
+                generation,
                 configmap_to_resource_item,
             )
             .await
@@ -229,6 +250,7 @@ pub async fn watch_resources(
                 Api::<Secret>::namespaced(client, namespace),
                 tx,
                 rt,
+                generation,
                 secret_to_resource_item,
             )
             .await
@@ -238,18 +260,20 @@ pub async fn watch_resources(
                 Api::<PersistentVolumeClaim>::namespaced(client, namespace),
                 tx,
                 rt,
+                generation,
                 pvc_to_resource_item,
             )
             .await
         }
         ResourceType::PersistentVolumes => {
-            watch_generic(Api::<PersistentVolume>::all(client), tx, rt, pv_to_resource_item).await
+            watch_generic(Api::<PersistentVolume>::all(client), tx, rt, generation, pv_to_resource_item).await
         }
         ResourceType::StorageClasses => {
             watch_generic(
                 Api::<StorageClass>::all(client),
                 tx,
                 rt,
+                generation,
                 storageclass_to_resource_item,
             )
             .await
@@ -259,21 +283,23 @@ pub async fn watch_resources(
                 Api::<ServiceAccount>::namespaced(client, namespace),
                 tx,
                 rt,
+                generation,
                 serviceaccount_to_resource_item,
             )
             .await
         }
         ResourceType::Namespaces => {
-            watch_generic(Api::<Namespace>::all(client), tx, rt, namespace_to_resource_item).await
+            watch_generic(Api::<Namespace>::all(client), tx, rt, generation, namespace_to_resource_item).await
         }
         ResourceType::Nodes => {
-            watch_generic(Api::<Node>::all(client), tx, rt, node_to_resource_item).await
+            watch_generic(Api::<Node>::all(client), tx, rt, generation, node_to_resource_item).await
         }
         ResourceType::Events => {
             watch_generic(
                 Api::<Event>::namespaced(client, namespace),
                 tx,
                 rt,
+                generation,
                 event_to_resource_item,
             )
             .await
@@ -283,6 +309,7 @@ pub async fn watch_resources(
                 Api::<ResourceQuota>::namespaced(client, namespace),
                 tx,
                 rt,
+                generation,
                 resourcequota_to_resource_item,
             )
             .await
@@ -292,6 +319,7 @@ pub async fn watch_resources(
                 Api::<LimitRange>::namespaced(client, namespace),
                 tx,
                 rt,
+                generation,
                 limitrange_to_resource_item,
             )
             .await
@@ -301,6 +329,7 @@ pub async fn watch_resources(
                 Api::<PodDisruptionBudget>::namespaced(client, namespace),
                 tx,
                 rt,
+                generation,
                 pdb_to_resource_item,
             )
             .await
