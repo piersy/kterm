@@ -68,6 +68,7 @@ where
 
         let items: Vec<ResourceItem> = cache.values().map(&converter).collect();
         if tx.send(AppEvent::ResourcesUpdatedForType(rt, items)).is_err() {
+            crate::logging::log_error(&format!("Watcher for {}: event channel closed", rt));
             break;
         }
     }

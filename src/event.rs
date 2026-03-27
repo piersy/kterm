@@ -6,6 +6,13 @@ use std::collections::HashMap;
 
 use crate::types::{ResourceItem, ResourceType};
 
+/// Send an event, logging a warning if the channel is closed.
+pub fn send_event(tx: &mpsc::UnboundedSender<AppEvent>, event: AppEvent) {
+    if tx.send(event).is_err() {
+        crate::logging::log_error("Event channel closed, failed to send event");
+    }
+}
+
 #[derive(Debug)]
 pub enum AppEvent {
     Key(KeyEvent),
@@ -99,7 +106,7 @@ impl EventHandler {
             }
         }
         for event in kept {
-            let _ = self.tx.send(event);
+            send_event(&self.tx, event);
         }
     }
 

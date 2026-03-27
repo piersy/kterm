@@ -6,7 +6,7 @@ use kube::api::LogParams;
 use kube::{Api, Client};
 use tokio::sync::mpsc;
 
-use crate::event::AppEvent;
+use crate::event::{self, AppEvent};
 
 pub async fn stream_pod_logs(
     client: Client,
@@ -36,11 +36,12 @@ pub async fn stream_pod_logs(
 
     while let Some(line) = lines.try_next().await? {
         if tx.send(AppEvent::LogLine(line)).is_err() {
+            crate::logging::log_error("Log stream: event channel closed");
             break;
         }
     }
 
-    let _ = tx.send(AppEvent::LogStreamEnded);
+    event::send_event(&tx, AppEvent::LogStreamEnded);
 
     Ok(())
 }

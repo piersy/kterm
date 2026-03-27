@@ -81,7 +81,7 @@ fn start_watchers(
                 if let Err(e) =
                     k8s::resources::watch_resources(client, &ns, rt, action_tx.clone()).await
                 {
-                    let _ = action_tx.send(AppEvent::K8sError(format!("Watch error: {}", e)));
+                    event::send_event(&action_tx,AppEvent::K8sError(format!("Watch error: {}", e)));
                 }
             }
         });
@@ -111,10 +111,10 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
 
                 match manager.list_namespaces().await {
                     Ok(namespaces) => {
-                        let _ = k8s_tx.send(AppEvent::NamespacesLoaded(namespaces));
+                        event::send_event(&k8s_tx,AppEvent::NamespacesLoaded(namespaces));
                     }
                     Err(e) => {
-                        let _ = k8s_tx.send(AppEvent::K8sError(format!(
+                        event::send_event(&k8s_tx,AppEvent::K8sError(format!(
                             "Failed to list namespaces: {}",
                             e
                         )));
@@ -125,18 +125,18 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
 
                 *init_mgr.lock().await = Some(manager);
 
-                let _ = k8s_tx.send(AppEvent::ContextsLoaded {
+                event::send_event(&k8s_tx,AppEvent::ContextsLoaded {
                     contexts,
                     current,
                     current_namespace,
                 });
             }
             Err(e) => {
-                let _ = k8s_tx.send(AppEvent::K8sError(format!(
+                event::send_event(&k8s_tx,AppEvent::K8sError(format!(
                     "Failed to connect to Kubernetes: {}. Running in offline mode.",
                     e
                 )));
-                let _ = k8s_tx.send(AppEvent::NamespacesLoaded(vec!["default".to_string()]));
+                event::send_event(&k8s_tx,AppEvent::NamespacesLoaded(vec!["default".to_string()]));
             }
         }
     });
@@ -179,7 +179,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                                 if let Err(e) =
                                     manager.switch_context(&context_name).await
                                 {
-                                    let _ = action_tx.send(AppEvent::K8sError(format!(
+                                    event::send_event(&action_tx,AppEvent::K8sError(format!(
                                         "Failed to switch context: {}",
                                         e
                                     )));
@@ -191,7 +191,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                                             .send(AppEvent::NamespacesLoaded(namespaces));
                                     }
                                     Err(e) => {
-                                        let _ = action_tx.send(AppEvent::K8sError(format!(
+                                        event::send_event(&action_tx,AppEvent::K8sError(format!(
                                             "Failed to list namespaces: {}",
                                             e
                                         )));
@@ -222,7 +222,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                                             k8s::resources::watch_resources(c, &n, rt, t.clone())
                                                 .await
                                         {
-                                            let _ = t.send(AppEvent::K8sError(format!(
+                                            event::send_event(&t,AppEvent::K8sError(format!(
                                                 "Watch error: {}",
                                                 e
                                             )));
@@ -308,7 +308,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                                             action_tx.send(AppEvent::DetailLoaded(desc));
                                     }
                                     Err(e) => {
-                                        let _ = action_tx.send(AppEvent::K8sError(
+                                        event::send_event(&action_tx,AppEvent::K8sError(
                                             format!("Describe error: {}", e),
                                         ));
                                     }
@@ -338,7 +338,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                                 )
                                 .await
                                 {
-                                    let _ = action_tx.send(AppEvent::K8sError(format!(
+                                    event::send_event(&action_tx,AppEvent::K8sError(format!(
                                         "Log stream error: {}",
                                         e
                                     )));
@@ -368,7 +368,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                                     k8s::actions::delete_resource(client, &ns, &name, rt)
                                         .await
                                 {
-                                    let _ = action_tx.send(AppEvent::K8sError(format!(
+                                    event::send_event(&action_tx,AppEvent::K8sError(format!(
                                         "Delete error: {}",
                                         e
                                     )));
@@ -397,7 +397,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                                     k8s::actions::restart_resource(client, &ns, &name, rt)
                                         .await
                                 {
-                                    let _ = action_tx.send(AppEvent::K8sError(format!(
+                                    event::send_event(&action_tx,AppEvent::K8sError(format!(
                                         "Restart error: {}",
                                         e
                                     )));
@@ -507,7 +507,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                                         )
                                         .await
                                         {
-                                            let _ = action_tx.send(AppEvent::K8sError(
+                                            event::send_event(&action_tx,AppEvent::K8sError(
                                                 format!("Apply error: {}", e),
                                             ));
                                         }
@@ -537,7 +537,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                                             .await
                                             {
                                                 Ok(items) => {
-                                                    let _ = search_tx.send(
+                                                    event::send_event(&search_tx,
                                                         AppEvent::SearchResultsBatch {
                                                             context: ctx.clone(),
                                                             resource_type: rt,
@@ -546,7 +546,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                                                     );
                                                 }
                                                 Err(e) => {
-                                                    let _ = search_tx.send(
+                                                    event::send_event(&search_tx,
                                                         AppEvent::K8sError(format!(
                                                             "Search {}/{}: {}",
                                                             ctx, rt, e
@@ -557,7 +557,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                                         }
                                     }
                                     Err(e) => {
-                                        let _ = search_tx.send(AppEvent::K8sError(
+                                        event::send_event(&search_tx,AppEvent::K8sError(
                                             format!("Connect to {}: {}", ctx, e),
                                         ));
                                     }
@@ -592,7 +592,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                                                     .send(AppEvent::DetailLoaded(desc));
                                             }
                                             Err(e) => {
-                                                let _ = action_tx.send(
+                                                event::send_event(&action_tx,
                                                     AppEvent::K8sError(format!(
                                                         "Describe error: {}",
                                                         e
@@ -602,7 +602,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                                         }
                                     }
                                     Err(e) => {
-                                        let _ = action_tx.send(AppEvent::K8sError(
+                                        event::send_event(&action_tx,AppEvent::K8sError(
                                             format!(
                                                 "Connect to {}: {}",
                                                 result.context, e
@@ -634,13 +634,13 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                                         )
                                         .await
                                         {
-                                            let _ = action_tx.send(AppEvent::K8sError(
+                                            event::send_event(&action_tx,AppEvent::K8sError(
                                                 format!("Log stream error: {}", e),
                                             ));
                                         }
                                     }
                                     Err(e) => {
-                                        let _ = action_tx.send(AppEvent::K8sError(
+                                        event::send_event(&action_tx,AppEvent::K8sError(
                                             format!(
                                                 "Connect to {}: {}",
                                                 result.context, e
@@ -747,7 +747,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                                 &count_ns,
                             )
                             .await;
-                            let _ = count_tx.send(AppEvent::ResourceCountsLoaded(counts));
+                            event::send_event(&count_tx,AppEvent::ResourceCountsLoaded(counts));
                         });
                         // Start watching all selected types
                         for rt in selected_types {
@@ -758,7 +758,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                                 if let Err(e) =
                                     k8s::resources::watch_resources(c, &n, rt, t.clone()).await
                                 {
-                                    let _ = t.send(AppEvent::K8sError(format!(
+                                    event::send_event(&t,AppEvent::K8sError(format!(
                                         "Watch error: {}",
                                         e
                                     )));
