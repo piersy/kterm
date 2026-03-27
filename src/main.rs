@@ -3,6 +3,7 @@ mod app;
 mod app_test;
 mod event;
 mod k8s;
+mod logging;
 mod types;
 mod ui;
 #[cfg(test)]
@@ -89,6 +90,7 @@ fn start_watchers(
 }
 
 async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
+    logging::init();
     let mut app = App::new();
     let mut events = EventHandler::new();
     let tx = events.sender();

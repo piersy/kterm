@@ -39,9 +39,10 @@ pub struct App {
     pub filter: String,
     pub filter_active: bool,
 
-    // Error
+    // Error popup (dismissible with Esc or auto-dismiss)
     pub error_message: Option<String>,
     pub error_ticks: u8,
+    pub error_popup: bool,
 
     // Dropdown selector
     pub dropdown_query: String,
@@ -119,6 +120,7 @@ impl App {
 
             error_message: None,
             error_ticks: 0,
+            error_popup: false,
 
             dropdown_query: String::new(),
             dropdown_filtered: Vec::new(),
@@ -444,19 +446,32 @@ impl App {
             if self.error_ticks > 20 {
                 self.error_message = None;
                 self.error_ticks = 0;
+                self.error_popup = false;
             }
         }
     }
 
     pub fn set_error(&mut self, msg: String) {
+        crate::logging::log_error(&msg);
         self.error_message = Some(msg);
         self.error_ticks = 0;
+        self.error_popup = true;
+    }
+
+    pub fn dismiss_error_popup(&mut self) {
+        self.error_popup = false;
     }
 
     pub fn handle_input(&mut self, key: KeyEvent) -> InputAction {
         // Global quit
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
             self.should_quit = true;
+            return InputAction::None;
+        }
+
+        // Dismiss error popup on any key
+        if self.error_popup {
+            self.dismiss_error_popup();
             return InputAction::None;
         }
 

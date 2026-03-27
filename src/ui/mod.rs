@@ -24,6 +24,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
             .split(frame.area());
         search::render(frame, app, chunks[0]);
         help::render_footer(frame, app, chunks[1]);
+        help::render_error_popup(frame, app);
         return;
     }
 
@@ -43,6 +44,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
             _ => unreachable!(),
         }
         help::render_footer(frame, app, chunks[1]);
+        help::render_error_popup(frame, app);
         return;
     }
 
@@ -108,4 +110,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     }
 
     help::render_footer(frame, app, chunks[2]);
+
+    // Error popup overlay (renders on top of everything)
+    help::render_error_popup(frame, app);
 }

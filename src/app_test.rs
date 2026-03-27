@@ -1049,6 +1049,45 @@ mod tests {
         assert_eq!(app.dropdown_selected, 0);
     }
 
+    // --- Error popup tests ---
+
+    #[test]
+    fn test_error_popup_shown_on_set_error() {
+        let mut app = App::new();
+        assert!(!app.error_popup);
+        app.set_error("connection refused".to_string());
+        assert!(app.error_popup);
+        assert_eq!(app.error_message.as_deref(), Some("connection refused"));
+    }
+
+    #[test]
+    fn test_error_popup_dismissed_on_any_key() {
+        let mut app = App::new();
+        app.focus = Focus::ResourceList;
+        app.set_error("timeout".to_string());
+        assert!(app.error_popup);
+
+        // Any key should dismiss the popup (and consume the key)
+        let action = app.handle_input(key(KeyCode::Char('j')));
+        assert_eq!(action, InputAction::None);
+        assert!(!app.error_popup);
+        // Error message still exists (for footer display), but popup is gone
+        assert!(app.error_message.is_some());
+    }
+
+    #[test]
+    fn test_error_popup_auto_dismiss_on_tick() {
+        let mut app = App::new();
+        app.set_error("test error".to_string());
+        assert!(app.error_popup);
+
+        for _ in 0..21 {
+            app.handle_tick();
+        }
+        assert!(!app.error_popup);
+        assert!(app.error_message.is_none());
+    }
+
     #[test]
     fn test_dropdown_filter_goes_from_results_to_empty() {
         let mut app = App::new();

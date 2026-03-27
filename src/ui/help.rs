@@ -121,6 +121,50 @@ pub fn render_confirm_dialog(frame: &mut Frame, action: ConfirmAction) {
     frame.render_widget(paragraph, popup_area);
 }
 
+pub fn render_error_popup(frame: &mut Frame, app: &App) {
+    if !app.error_popup {
+        return;
+    }
+    if let Some(ref msg) = app.error_message {
+        let area = frame.area();
+        // Compute height: 2 lines border + message lines (wrap at ~60% width)
+        let popup_width = (area.width as f32 * 0.6).max(30.0).min(area.width as f32) as u16;
+        let inner_width = popup_width.saturating_sub(4) as usize;
+        let wrapped_lines = if inner_width > 0 {
+            (msg.len() / inner_width) + 1
+        } else {
+            1
+        };
+        let popup_height = (wrapped_lines as u16 + 4).min(area.height);
+
+        let popup_area = centered_rect_fixed(popup_width, popup_height, area);
+        frame.render_widget(Clear, popup_area);
+
+        let block = Block::default()
+            .title(" Error ")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Red));
+
+        let text = format!("{}\n\nPress any key to dismiss", msg);
+        let paragraph = Paragraph::new(text)
+            .block(block)
+            .style(Style::default().fg(Color::White))
+            .wrap(ratatui::widgets::Wrap { trim: false });
+
+        frame.render_widget(paragraph, popup_area);
+    }
+}
+
+fn centered_rect_fixed(width: u16, height: u16, area: Rect) -> Rect {
+    let vertical = Layout::vertical([Constraint::Length(height)])
+        .flex(Flex::Center)
+        .split(area);
+    let horizontal = Layout::horizontal([Constraint::Length(width)])
+        .flex(Flex::Center)
+        .split(vertical[0]);
+    horizontal[0]
+}
+
 fn centered_rect(percent_x: u16, height: u16, area: Rect) -> Rect {
     let vertical = Layout::vertical([Constraint::Length(height)])
         .flex(Flex::Center)
