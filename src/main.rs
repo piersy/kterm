@@ -864,11 +864,10 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                     tokio::spawn(async move {
                         let reachable = match k8s::client::K8sManager::client_for_context(&probe_ctx).await {
                             Ok(client) => {
-                                let ns_api: kube::Api<k8s_openapi::api::core::v1::Namespace> =
-                                    kube::Api::all(client);
+                                // Use /version endpoint: no RBAC needed, no etcd hit, tiny response.
                                 tokio::time::timeout(
                                     std::time::Duration::from_secs(3),
-                                    ns_api.list(&kube::api::ListParams::default().limit(1)),
+                                    client.apiserver_version(),
                                 )
                                 .await
                                 .is_ok_and(|r| r.is_ok())
