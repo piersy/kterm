@@ -72,6 +72,7 @@ fn start_watchers(
 ) {
     let ns = app.current_namespace().to_string();
     let generation = app.generation;
+    let context_name = app.current_context().to_string();
 
     for &rt in &app.selected_resource_types {
         // Skip if a watcher for this type is already running
@@ -81,6 +82,7 @@ fn start_watchers(
         let mgr = k8s_manager.clone();
         let action_tx = tx.clone();
         let ns = ns.clone();
+        let ctx = context_name.clone();
 
         let handle = tokio::spawn(async move {
             let guard = mgr.lock().await;
@@ -97,6 +99,14 @@ fn start_watchers(
                     )
                     .await
                 {
+                    // Mark cluster unreachable so it's excluded from future searches
+                    event::send_event(
+                        &action_tx,
+                        AppEvent::ClusterProbeResult {
+                            context: ctx,
+                            reachable: false,
+                        },
+                    );
                     event::send_event(
                         &action_tx,
                         AppEvent::K8sError(format!("Watch error: {}", e)),
@@ -163,11 +173,9 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                         event::send_event(&k8s_tx,AppEvent::NamespacesLoaded(namespaces));
                         true
                     }
-                    Err(e) => {
-                        event::send_event(&k8s_tx,AppEvent::K8sError(format!(
-                            "Failed to list namespaces: {}",
-                            e
-                        )));
+                    Err(_) => {
+                        // Don't show an error popup here — the probe system will
+                        // show "all clusters unreachable" once all probes complete.
                         event::send_event(&k8s_tx, AppEvent::NamespacesLoaded(vec!["default".to_string()]));
                         false
                     }
@@ -640,20 +648,23 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                                                             },
                                                         );
                                                     }
-                                                    Err(e) => {
-                                                        event::send_event(&search_tx,
-                                                            AppEvent::K8sError(format!(
-                                                                "Search {}/{}: {}",
-                                                                ctx, rt, e
-                                                            )),
-                                                        );
+                                                    Err(_) => {
+                                                        // Silently skip individual resource type
+                                                        // errors (could be RBAC, not connectivity).
                                                     }
                                                 }
                                             }
                                         }
-                                        Err(e) => {
+                                        Err(_) => {
+                                            // Cluster became unreachable — mark it and show one error.
+                                            event::send_event(&search_tx,
+                                                AppEvent::ClusterProbeResult {
+                                                    context: ctx.clone(),
+                                                    reachable: false,
+                                                },
+                                            );
                                             event::send_event(&search_tx,AppEvent::K8sError(
-                                                format!("Connect to {}: {}", ctx, e),
+                                                format!("Cluster {} is now unreachable", ctx),
                                             ));
                                         }
                                     }
