@@ -32,6 +32,8 @@ pub enum AppEvent {
         contexts: Vec<String>,
         current: String,
         current_namespace: String,
+        /// Whether the current context successfully connected (listed namespaces).
+        current_reachable: bool,
     },
     K8sError(String),
     SearchResultsBatch {
@@ -46,6 +48,11 @@ pub enum AppEvent {
     /// Context switch completed; main loop should start watchers.
     ContextSwitchReady,
     SearchScanComplete(String),
+    /// Result of probing a cluster for connectivity at startup.
+    ClusterProbeResult {
+        context: String,
+        reachable: bool,
+    },
 }
 
 pub struct EventHandler {
