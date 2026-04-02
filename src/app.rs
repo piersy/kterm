@@ -75,6 +75,10 @@ pub struct App {
     // Used to discard stale watcher events from previous generations.
     pub generation: u64,
 
+    // Editing: set while an external editor subprocess owns the terminal.
+    // Holds (resource_name, namespace, resource_type) needed to apply after editing.
+    pub editing: Option<(String, String, ResourceType)>,
+
     // Quit
     pub should_quit: bool,
 }
@@ -153,6 +157,7 @@ impl App {
 
             generation: 0,
 
+            editing: None,
             should_quit: false,
         }
     }

@@ -53,6 +53,10 @@ pub enum AppEvent {
         context: String,
         reachable: bool,
     },
+    /// External editor subprocess has exited.
+    EditingFinished {
+        result: Result<Option<String>, String>,
+    },
 }
 
 pub struct EventHandler {

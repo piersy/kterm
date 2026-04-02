@@ -231,7 +231,9 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
     let mut log_stream_handle: Option<tokio::task::JoinHandle<()>> = None;
 
     loop {
-        terminal.draw(|f| ui::render(f, &mut app))?;
+        if app.editing.is_none() {
+            terminal.draw(|f| ui::render(f, &mut app))?;
+        }
 
         let Some(event) = events.next().await else {
             break;
@@ -239,6 +241,10 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
 
         match event {
             AppEvent::Key(key) => {
+                // While editing, the editor owns the terminal — discard keys.
+                if app.editing.is_some() {
+                    continue;
+                }
                 if key.kind != KeyEventKind::Press {
                     continue;
                 }
@@ -572,37 +578,15 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                             let yaml = resource.raw_yaml.clone();
                             let name = resource.name.clone();
                             let ns = app.current_namespace().to_string();
-                            let mgr = k8s_manager.clone();
-                            let action_tx = tx.clone();
 
+                            app.editing = Some((name, ns, rt));
                             events.suspend();
                             disable_raw_mode()?;
 
-                            let edited = edit_yaml_in_editor(&yaml);
-
-                            execute!(terminal.backend_mut(), EnterAlternateScreen)?;
-                            enable_raw_mode()?;
-                            terminal.clear()?;
-                            events.resume();
-
-                            if let Ok(Some(new_yaml)) = edited {
-                                tokio::spawn(async move {
-                                    let guard = mgr.lock().await;
-                                    if let Some(ref manager) = *guard {
-                                        let client = manager.client.clone();
-                                        drop(guard);
-                                        if let Err(e) = k8s::actions::apply_yaml(
-                                            client, &ns, &name, rt, &new_yaml,
-                                        )
-                                        .await
-                                        {
-                                            event::send_event(&action_tx,AppEvent::K8sError(
-                                                format!("Apply error: {}", e),
-                                            ));
-                                        }
-                                    }
-                                });
-                            }
+                            let edit_tx = tx.clone();
+                            tokio::spawn(async move {
+                                edit_yaml_in_editor_async(&yaml, edit_tx).await;
+                            });
                         }
                     }
                     InputAction::StartSearch => {
@@ -969,6 +953,45 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                     }
                 }
             }
+            AppEvent::EditingFinished { result } => {
+                // Restore terminal state — editor subprocess has exited.
+                execute!(terminal.backend_mut(), EnterAlternateScreen)?;
+                enable_raw_mode()?;
+                terminal.clear()?;
+                events.resume();
+
+                if let Some((name, ns, rt)) = app.editing.take() {
+                    match result {
+                        Ok(Some(new_yaml)) => {
+                            let mgr = k8s_manager.clone();
+                            let action_tx = tx.clone();
+                            tokio::spawn(async move {
+                                let guard = mgr.lock().await;
+                                if let Some(ref manager) = *guard {
+                                    let client = manager.client.clone();
+                                    drop(guard);
+                                    if let Err(e) = k8s::actions::apply_yaml(
+                                        client, &ns, &name, rt, &new_yaml,
+                                    )
+                                    .await
+                                    {
+                                        event::send_event(
+                                            &action_tx,
+                                            AppEvent::K8sError(format!("Apply error: {}", e)),
+                                        );
+                                    }
+                                }
+                            });
+                        }
+                        Ok(None) => {
+                            // No changes or editor exited with error status.
+                        }
+                        Err(e) => {
+                            app.set_error(format!("Editor error: {}", e));
+                        }
+                    }
+                }
+            }
         }
 
         if app.should_quit {
@@ -1113,27 +1136,44 @@ fn strip_managed_fields(yaml: &str) -> String {
     }
 }
 
-fn edit_yaml_in_editor(yaml: &str) -> Result<Option<String>> {
+/// Prepare the editor temp file synchronously (before spawning), then
+/// await the editor process asynchronously so the event loop stays alive.
+async fn edit_yaml_in_editor_async(
+    yaml: &str,
+    tx: tokio::sync::mpsc::UnboundedSender<event::AppEvent>,
+) {
     use std::io::Write;
 
     let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
     let cleaned_yaml = strip_managed_fields(yaml);
 
-    let mut tmp = tempfile::NamedTempFile::new()?;
-    tmp.write_all(cleaned_yaml.as_bytes())?;
-    tmp.flush()?;
+    let result = async {
+        let mut tmp = tempfile::NamedTempFile::new()
+            .map_err(|e| e.to_string())?;
+        tmp.write_all(cleaned_yaml.as_bytes())
+            .map_err(|e| e.to_string())?;
+        tmp.flush().map_err(|e| e.to_string())?;
+        let path = tmp.path().to_owned();
 
-    let path = tmp.path().to_owned();
-    let status = std::process::Command::new(&editor).arg(&path).status()?;
+        let status = tokio::process::Command::new(&editor)
+            .arg(&path)
+            .status()
+            .await
+            .map_err(|e| e.to_string())?;
 
-    if !status.success() {
-        return Ok(None);
+        if !status.success() {
+            return Ok(None);
+        }
+
+        let new_content =
+            std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+        if new_content == cleaned_yaml {
+            return Ok(None);
+        }
+
+        Ok(Some(new_content))
     }
+    .await;
 
-    let new_content = std::fs::read_to_string(&path)?;
-    if new_content == cleaned_yaml {
-        return Ok(None);
-    }
-
-    Ok(Some(new_content))
+    event::send_event(&tx, event::AppEvent::EditingFinished { result });
 }
