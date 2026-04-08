@@ -1,5 +1,17 @@
 use std::fmt;
 
+/// Sentinel label representing "all namespaces". When this is the selected
+/// namespace, K8s queries are scoped cluster-wide via `Api::all` instead of
+/// to a single namespace. The label contains characters (spaces, angle
+/// brackets) that cannot appear in a real DNS-1123 Kubernetes namespace name,
+/// so it is guaranteed not to collide with a real namespace.
+pub const ALL_NAMESPACES_LABEL: &str = "<all namespaces>";
+
+/// Returns true if the given namespace string is the all-namespaces sentinel.
+pub fn is_all_namespaces(ns: &str) -> bool {
+    ns == ALL_NAMESPACES_LABEL
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ResourceType {
     // Workloads
