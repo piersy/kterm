@@ -1090,8 +1090,9 @@ mod tests {
         let action = app.handle_input(key(KeyCode::Char('j')));
         assert_eq!(action, InputAction::None);
         assert!(!app.error_popup);
-        // Error message still exists (for footer display), but popup is gone
-        assert!(app.error_message.is_some());
+        // Dismissing the popup also clears the error message so it doesn't
+        // linger in the footer forever.
+        assert!(app.error_message.is_none());
     }
 
     // --- Generation counter tests ---

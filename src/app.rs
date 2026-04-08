@@ -476,6 +476,7 @@ impl App {
 
     pub fn dismiss_error_popup(&mut self) {
         self.error_popup = false;
+        self.error_message = None;
     }
 
     /// Increment the generation counter, invalidating all in-flight events.

@@ -1,5 +1,5 @@
 use ratatui::layout::{Constraint, Flex, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
@@ -77,22 +77,10 @@ pub fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
         ViewMode::Search => "Esc:Back  Down/Up:Nav  Enter:Detail  Type to search...",
     };
 
-    let mut spans = vec![Span::styled(
+    let line = Line::from(Span::styled(
         bindings.to_owned(),
         Style::default().fg(Color::DarkGray),
-    )];
-
-    if let Some(ref err) = app.error_message {
-        spans.push(Span::raw("  "));
-        spans.push(Span::styled(
-            err.as_str(),
-            Style::default()
-                .fg(Color::Red)
-                .add_modifier(Modifier::BOLD),
-        ));
-    }
-
-    let line = Line::from(spans);
+    ));
     let paragraph = Paragraph::new(line);
 
     frame.render_widget(paragraph, area);

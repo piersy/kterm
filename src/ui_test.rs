@@ -381,7 +381,7 @@ mod tests {
     // --- Error Display ---
 
     #[test]
-    fn test_error_message_renders_in_footer() {
+    fn test_error_message_renders_in_popup() {
         let mut app = app_with_pods();
         app.set_error("Connection timed out".to_string());
 
@@ -389,7 +389,22 @@ mod tests {
 
         assert!(
             output.contains("Connection timed out"),
-            "Footer should show error message, got:\n{}",
+            "Error popup should show error message, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_error_message_cleared_from_footer_after_dismiss() {
+        let mut app = app_with_pods();
+        app.set_error("Connection timed out".to_string());
+        app.dismiss_error_popup();
+
+        let output = render_to_string(&mut app, 200, 24);
+
+        assert!(
+            !output.contains("Connection timed out"),
+            "Dismissed error should not linger anywhere on screen, got:\n{}",
             output
         );
     }
