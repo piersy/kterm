@@ -5,7 +5,10 @@ mod tests {
     use ratatui::Terminal;
 
     use crate::app::App;
-    use crate::types::{ConfirmAction, Focus, ResourceItem, ResourceType, SelectorTarget, ViewMode};
+    use crate::types::{
+        ConfirmAction, Focus, ResourceItem, ResourceType, SelectorTarget, ViewMode,
+        ALL_NAMESPACES_LABEL,
+    };
     use crate::ui;
 
     fn key(code: KeyCode) -> KeyEvent {
@@ -126,6 +129,27 @@ mod tests {
             "Should show RESTARTS column header"
         );
         assert!(output.contains("NODE"), "Should show NODE column header");
+    }
+
+    #[test]
+    fn test_all_namespaces_shows_namespace_column() {
+        let mut app = app_with_pods();
+        // Select the all-namespaces sentinel so the renderer adds a
+        // NAMESPACE column to the table.
+        app.namespaces = vec![
+            ALL_NAMESPACES_LABEL.to_string(),
+            "default".to_string(),
+        ];
+        app.selected_namespaces.clear();
+        app.selected_namespaces.insert(0); // <all namespaces>
+
+        let output = render_to_string(&mut app, 120, 24);
+
+        assert!(
+            output.contains("NAMESPACE"),
+            "All-namespaces mode should show a NAMESPACE column header, got:\n{}",
+            output
+        );
     }
 
     #[test]

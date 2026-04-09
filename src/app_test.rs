@@ -4,8 +4,8 @@ mod tests {
 
     use crate::app::{App, InputAction};
     use crate::types::{
-        is_all_namespaces, ConfirmAction, Focus, ResourceItem, ResourceType, SelectorTarget,
-        ViewMode, ALL_NAMESPACES_LABEL,
+        is_all_namespaces, ColumnDef, ConfirmAction, Focus, ResourceItem, ResourceType,
+        SelectorTarget, ViewMode, ALL_NAMESPACES_LABEL,
     };
 
     fn key(code: KeyCode) -> KeyEvent {
@@ -651,7 +651,8 @@ mod tests {
     #[test]
     fn test_resource_item_columns_pods() {
         let item = fake_pod("my-pod", "Running");
-        let cols = item.columns(ResourceType::Pods);
+        let defs = ResourceType::Pods.column_defs(false);
+        let cols = item.column_values(&defs);
         assert_eq!(cols[0], "my-pod");
         assert_eq!(cols[1], "Running");
         assert_eq!(cols[2], "1h");
@@ -672,7 +673,8 @@ mod tests {
             ],
             raw_yaml: String::new(),
         };
-        let cols = item.columns(ResourceType::PersistentVolumeClaims);
+        let defs = ResourceType::PersistentVolumeClaims.column_defs(false);
+        let cols = item.column_values(&defs);
         assert_eq!(cols[0], "my-pvc");
         assert_eq!(cols[1], "Bound");
         assert_eq!(cols[2], "pv-001");
@@ -690,10 +692,56 @@ mod tests {
             extra: vec![("ready".to_string(), "3/3".to_string())],
             raw_yaml: String::new(),
         };
-        let cols = item.columns(ResourceType::StatefulSets);
+        let defs = ResourceType::StatefulSets.column_defs(false);
+        let cols = item.column_values(&defs);
         assert_eq!(cols[0], "my-ss");
         assert_eq!(cols[1], "3/3");
         assert_eq!(cols[2], "5d");
+    }
+
+    #[test]
+    fn test_column_defs_pods_default() {
+        let defs = ResourceType::Pods.column_defs(false);
+        let headers: Vec<&str> = defs.iter().map(|d| d.header).collect();
+        assert_eq!(headers, vec!["NAME", "STATUS", "AGE", "RESTARTS", "NODE"]);
+        assert!(!defs[0].is_status); // NAME
+        assert!(defs[1].is_status);  // STATUS
+    }
+
+    #[test]
+    fn test_column_defs_all_namespaces_inserts_namespace_column() {
+        let defs = ResourceType::Pods.column_defs(true);
+        let headers: Vec<&str> = defs.iter().map(|d| d.header).collect();
+        assert_eq!(
+            headers,
+            vec!["NAME", "NAMESPACE", "STATUS", "AGE", "RESTARTS", "NODE"]
+        );
+    }
+
+    #[test]
+    fn test_column_values_with_namespace_defs() {
+        let item = fake_pod("my-pod", "Running");
+        let defs = ResourceType::Pods.column_defs(true);
+        let vals = item.column_values(&defs);
+        assert_eq!(vals[0], "my-pod");
+        assert_eq!(vals[1], "default"); // NAMESPACE column
+        assert_eq!(vals[2], "Running"); // STATUS
+    }
+
+    #[test]
+    fn test_column_defs_to_constraints_normalises_to_100() {
+        let defs = ResourceType::Pods.column_defs(false);
+        let constraints = ColumnDef::to_constraints(&defs);
+        assert_eq!(constraints.len(), defs.len());
+    }
+
+    #[test]
+    fn test_column_defs_status_flag_per_type() {
+        // PersistentVolumes has STATUS at index 2, not index 1
+        let defs = ResourceType::PersistentVolumes.column_defs(false);
+        assert!(!defs[0].is_status); // NAME
+        assert!(!defs[1].is_status); // CAPACITY
+        assert!(defs[2].is_status);  // STATUS
     }
 
     #[test]
