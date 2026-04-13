@@ -329,16 +329,29 @@ impl App {
                 .iter()
                 .enumerate()
                 .filter_map(|(i, t)| {
-                    let count = self.resource_counts.get(t).copied().unwrap_or(0);
-                    if count > 0 || self.selected_resource_types.contains(t) {
-                        let label = if count > 0 {
-                            format!("{} ({})", t, count)
-                        } else {
-                            t.to_string()
-                        };
-                        Some((label, i))
-                    } else {
-                        None
+                    // Distinguish between:
+                    //   Some(n) where n > 0 : type has resources -> show with count
+                    //   Some(0)             : type verified empty -> hide unless selected
+                    //   None                : count fetch failed (timeout/error) -> show
+                    //                         (don't hide types just because their count
+                    //                         request failed)
+                    match self.resource_counts.get(t) {
+                        Some(&count) if count > 0 => {
+                            Some((format!("{} ({})", t, count), i))
+                        }
+                        Some(_) => {
+                            // Verified zero — only show if currently selected
+                            if self.selected_resource_types.contains(t) {
+                                Some((t.to_string(), i))
+                            } else {
+                                None
+                            }
+                        }
+                        None => {
+                            // Count unknown (fetch failed/timed out) — show the
+                            // type so the user can still select it
+                            Some((t.to_string(), i))
+                        }
                     }
                 })
                 .collect()

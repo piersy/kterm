@@ -350,6 +350,20 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                         app.resources_by_type.clear();
                         app.select_first_row();
 
+                        // Re-fetch counts if the previous count fetch was
+                        // aborted (e.g. user switched types before the initial
+                        // fetch completed). The generation increment above
+                        // ensures stale in-flight events are discarded.
+                        if app.resource_counts.is_empty() {
+                            let ns = app.current_namespace().to_string();
+                            start_count_fetch(
+                                &app,
+                                &k8s_manager,
+                                &tx,
+                                &ns,
+                                &mut watcher_handles,
+                            );
+                        }
                         start_watchers(&app, &k8s_manager, &tx, &mut watcher_handles, &mut active_watch_types);
                     }
                     InputAction::Describe => {
