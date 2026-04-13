@@ -3,7 +3,10 @@ mod tests {
     use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
 
     use crate::app::{App, InputAction};
-    use crate::types::{ConfirmAction, Focus, ResourceItem, ResourceType, SelectorTarget, ViewMode};
+    use crate::types::{
+        is_all_namespaces, ColumnDef, ConfirmAction, Focus, ResourceItem, ResourceType,
+        SelectorTarget, ViewMode, ALL_NAMESPACES_LABEL,
+    };
 
     fn key(code: KeyCode) -> KeyEvent {
         KeyEvent {
@@ -205,6 +208,78 @@ mod tests {
         assert_eq!(action, InputAction::NamespaceChanged);
         assert!(app.selected_namespaces.contains(&1));
         assert_eq!(app.focus, Focus::ResourceList);
+    }
+
+    #[test]
+    fn test_namespace_selector_has_all_namespaces_option_first() {
+        let mut app = App::new();
+        // Simulate the shape produced by the NamespacesLoaded handler:
+        // sentinel at index 0, real namespaces after it.
+        app.namespaces = vec![
+            ALL_NAMESPACES_LABEL.to_string(),
+            "alpha".to_string(),
+            "beta".to_string(),
+            "default".to_string(),
+            "kube-system".to_string(),
+        ];
+        app.selected_namespaces.clear();
+        app.selected_namespaces.insert(3); // "default"
+        app.focus = Focus::ResourceList;
+
+        // Open namespace selector: the sentinel should be the first displayed
+        // item even though alphabetically it is not first.
+        app.handle_input(key(KeyCode::Char('n')));
+        assert_eq!(
+            app.dropdown_filtered.first().copied(),
+            Some(0),
+            "all-namespaces sentinel must be the first displayed option"
+        );
+
+        // Enter on the currently highlighted first entry selects <all>.
+        let action = app.handle_input(key(KeyCode::Enter));
+        assert_eq!(action, InputAction::NamespaceChanged);
+        assert!(app.selected_namespaces.contains(&0));
+        assert!(is_all_namespaces(app.current_namespace()));
+    }
+
+    #[test]
+    fn test_namespace_all_stays_first_after_fuzzy_filter() {
+        let mut app = App::new();
+        app.namespaces = vec![
+            ALL_NAMESPACES_LABEL.to_string(),
+            "alpha".to_string(),
+            "beta".to_string(),
+        ];
+        app.selected_namespaces.clear();
+        app.selected_namespaces.insert(1);
+        app.focus = Focus::ResourceList;
+
+        app.handle_input(key(KeyCode::Char('n')));
+        // Type a filter that does NOT match the sentinel label.
+        app.handle_input(key(KeyCode::Char('b')));
+        app.handle_input(key(KeyCode::Char('e')));
+
+        assert_eq!(
+            app.dropdown_filtered.first().copied(),
+            Some(0),
+            "all-namespaces must remain first even when fuzzy filter is active"
+        );
+    }
+
+    #[test]
+    fn test_app_new_has_all_namespaces_sentinel() {
+        let app = App::new();
+        assert_eq!(app.namespaces.first().map(|s| s.as_str()), Some(ALL_NAMESPACES_LABEL));
+        // Default selection should be a real namespace, not the sentinel.
+        assert!(!app.selected_namespaces.contains(&0));
+        assert_eq!(app.current_namespace(), "default");
+    }
+
+    #[test]
+    fn test_is_all_namespaces_helper() {
+        assert!(is_all_namespaces(ALL_NAMESPACES_LABEL));
+        assert!(!is_all_namespaces("default"));
+        assert!(!is_all_namespaces(""));
     }
 
     #[test]
@@ -576,7 +651,8 @@ mod tests {
     #[test]
     fn test_resource_item_columns_pods() {
         let item = fake_pod("my-pod", "Running");
-        let cols = item.columns(ResourceType::Pods);
+        let defs = ResourceType::Pods.column_defs(false);
+        let cols = item.column_values(&defs);
         assert_eq!(cols[0], "my-pod");
         assert_eq!(cols[1], "Running");
         assert_eq!(cols[2], "1h");
@@ -597,7 +673,8 @@ mod tests {
             ],
             raw_yaml: String::new(),
         };
-        let cols = item.columns(ResourceType::PersistentVolumeClaims);
+        let defs = ResourceType::PersistentVolumeClaims.column_defs(false);
+        let cols = item.column_values(&defs);
         assert_eq!(cols[0], "my-pvc");
         assert_eq!(cols[1], "Bound");
         assert_eq!(cols[2], "pv-001");
@@ -615,10 +692,56 @@ mod tests {
             extra: vec![("ready".to_string(), "3/3".to_string())],
             raw_yaml: String::new(),
         };
-        let cols = item.columns(ResourceType::StatefulSets);
+        let defs = ResourceType::StatefulSets.column_defs(false);
+        let cols = item.column_values(&defs);
         assert_eq!(cols[0], "my-ss");
         assert_eq!(cols[1], "3/3");
         assert_eq!(cols[2], "5d");
+    }
+
+    #[test]
+    fn test_column_defs_pods_default() {
+        let defs = ResourceType::Pods.column_defs(false);
+        let headers: Vec<&str> = defs.iter().map(|d| d.header).collect();
+        assert_eq!(headers, vec!["NAME", "STATUS", "AGE", "RESTARTS", "NODE"]);
+        assert!(!defs[0].is_status); // NAME
+        assert!(defs[1].is_status);  // STATUS
+    }
+
+    #[test]
+    fn test_column_defs_all_namespaces_inserts_namespace_column() {
+        let defs = ResourceType::Pods.column_defs(true);
+        let headers: Vec<&str> = defs.iter().map(|d| d.header).collect();
+        assert_eq!(
+            headers,
+            vec!["NAME", "NAMESPACE", "STATUS", "AGE", "RESTARTS", "NODE"]
+        );
+    }
+
+    #[test]
+    fn test_column_values_with_namespace_defs() {
+        let item = fake_pod("my-pod", "Running");
+        let defs = ResourceType::Pods.column_defs(true);
+        let vals = item.column_values(&defs);
+        assert_eq!(vals[0], "my-pod");
+        assert_eq!(vals[1], "default"); // NAMESPACE column
+        assert_eq!(vals[2], "Running"); // STATUS
+    }
+
+    #[test]
+    fn test_column_defs_to_constraints_normalises_to_100() {
+        let defs = ResourceType::Pods.column_defs(false);
+        let constraints = ColumnDef::to_constraints(&defs);
+        assert_eq!(constraints.len(), defs.len());
+    }
+
+    #[test]
+    fn test_column_defs_status_flag_per_type() {
+        // PersistentVolumes has STATUS at index 2, not index 1
+        let defs = ResourceType::PersistentVolumes.column_defs(false);
+        assert!(!defs[0].is_status); // NAME
+        assert!(!defs[1].is_status); // CAPACITY
+        assert!(defs[2].is_status);  // STATUS
     }
 
     #[test]

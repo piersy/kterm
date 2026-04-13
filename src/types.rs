@@ -1,5 +1,17 @@
 use std::fmt;
 
+/// Sentinel label representing "all namespaces". When this is the selected
+/// namespace, K8s queries are scoped cluster-wide via `Api::all` instead of
+/// to a single namespace. The label contains characters (spaces, angle
+/// brackets) that cannot appear in a real DNS-1123 Kubernetes namespace name,
+/// so it is guaranteed not to collide with a real namespace.
+pub const ALL_NAMESPACES_LABEL: &str = "<all namespaces>";
+
+/// Returns true if the given namespace string is the all-namespaces sentinel.
+pub fn is_all_namespaces(ns: &str) -> bool {
+    ns == ALL_NAMESPACES_LABEL
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ResourceType {
     // Workloads
@@ -67,46 +79,158 @@ impl ResourceType {
         ResourceType::PodDisruptionBudgets,
     ];
 
-    pub fn column_headers(&self) -> Vec<&'static str> {
-        match self {
-            ResourceType::Pods => vec!["NAME", "STATUS", "AGE", "RESTARTS", "NODE"],
-            ResourceType::Deployments => {
-                vec!["NAME", "READY", "UP-TO-DATE", "AVAILABLE", "AGE"]
-            }
-            ResourceType::StatefulSets => vec!["NAME", "READY", "AGE"],
-            ResourceType::DaemonSets => vec!["NAME", "DESIRED", "CURRENT", "READY", "AGE"],
-            ResourceType::ReplicaSets => vec!["NAME", "DESIRED", "CURRENT", "READY", "AGE"],
-            ResourceType::ReplicationControllers => {
-                vec!["NAME", "DESIRED", "CURRENT", "READY", "AGE"]
-            }
-            ResourceType::Jobs => vec!["NAME", "COMPLETIONS", "AGE"],
-            ResourceType::CronJobs => vec!["NAME", "SCHEDULE", "SUSPEND", "ACTIVE", "AGE"],
-            ResourceType::HorizontalPodAutoscalers => {
-                vec!["NAME", "MINPODS", "MAXPODS", "REPLICAS", "AGE"]
-            }
-            ResourceType::Services => vec!["NAME", "TYPE", "CLUSTER-IP", "PORTS", "AGE"],
-            ResourceType::Endpoints => vec!["NAME", "ENDPOINTS", "AGE"],
-            ResourceType::Ingresses => vec!["NAME", "CLASS", "HOSTS", "AGE"],
-            ResourceType::NetworkPolicies => vec!["NAME", "POD-SELECTOR", "AGE"],
-            ResourceType::ConfigMaps => vec!["NAME", "DATA", "AGE"],
-            ResourceType::Secrets => vec!["NAME", "TYPE", "DATA", "AGE"],
-            ResourceType::PersistentVolumeClaims => {
-                vec!["NAME", "STATUS", "VOLUME", "CAPACITY", "AGE"]
-            }
-            ResourceType::PersistentVolumes => {
-                vec!["NAME", "CAPACITY", "STATUS", "STORAGECLASS", "AGE"]
-            }
-            ResourceType::StorageClasses => vec!["NAME", "PROVISIONER", "AGE"],
-            ResourceType::ServiceAccounts => vec!["NAME", "AGE"],
-            ResourceType::Namespaces => vec!["NAME", "STATUS", "AGE"],
-            ResourceType::Nodes => vec!["NAME", "STATUS", "ROLES", "AGE"],
-            ResourceType::Events => vec!["NAME", "TYPE", "REASON", "MESSAGE", "AGE"],
-            ResourceType::ResourceQuotas => vec!["NAME", "AGE"],
-            ResourceType::LimitRanges => vec!["NAME", "AGE"],
-            ResourceType::PodDisruptionBudgets => {
-                vec!["NAME", "MIN-AVAILABLE", "MAX-UNAVAILABLE", "AGE"]
-            }
+    /// Returns the unified column definitions for this resource type.
+    ///
+    /// Each [`ColumnDef`] bundles the header label, relative width, and
+    /// whether the column should receive status-aware coloring.  When
+    /// `all_namespaces` is true a NAMESPACE column is injected after NAME
+    /// so the user can distinguish resources across namespaces.
+    pub fn column_defs(&self, all_namespaces: bool) -> Vec<ColumnDef> {
+        use ColumnDef as C;
+
+        let mut defs = match self {
+            ResourceType::Pods => vec![
+                C::name(30),
+                C::status(15),
+                C::col("AGE", 15),
+                C::col("RESTARTS", 15),
+                C::col("NODE", 25),
+            ],
+            ResourceType::Deployments => vec![
+                C::name(30),
+                C::col("READY", 15),
+                C::col("UP-TO-DATE", 20),
+                C::col("AVAILABLE", 20),
+                C::col("AGE", 15),
+            ],
+            ResourceType::StatefulSets => vec![
+                C::name(40),
+                C::col("READY", 30),
+                C::col("AGE", 30),
+            ],
+            ResourceType::DaemonSets
+            | ResourceType::ReplicaSets
+            | ResourceType::ReplicationControllers => vec![
+                C::name(30),
+                C::col("DESIRED", 15),
+                C::col("CURRENT", 15),
+                C::col("READY", 15),
+                C::col("AGE", 25),
+            ],
+            ResourceType::Jobs => vec![
+                C::name(40),
+                C::col("COMPLETIONS", 30),
+                C::col("AGE", 30),
+            ],
+            ResourceType::CronJobs => vec![
+                C::name(25),
+                C::col("SCHEDULE", 25),
+                C::col("SUSPEND", 15),
+                C::col("ACTIVE", 15),
+                C::col("AGE", 20),
+            ],
+            ResourceType::HorizontalPodAutoscalers => vec![
+                C::name(30),
+                C::col("MINPODS", 15),
+                C::col("MAXPODS", 15),
+                C::col("REPLICAS", 15),
+                C::col("AGE", 25),
+            ],
+            ResourceType::Services => vec![
+                C::name(25),
+                C::col("TYPE", 15),
+                C::col("CLUSTER-IP", 20),
+                C::col("PORTS", 25),
+                C::col("AGE", 15),
+            ],
+            ResourceType::Endpoints => vec![
+                C::name(30),
+                C::col("ENDPOINTS", 50),
+                C::col("AGE", 20),
+            ],
+            ResourceType::Ingresses => vec![
+                C::name(25),
+                C::col("CLASS", 20),
+                C::col("HOSTS", 35),
+                C::col("AGE", 20),
+            ],
+            ResourceType::NetworkPolicies => vec![
+                C::name(30),
+                C::col("POD-SELECTOR", 50),
+                C::col("AGE", 20),
+            ],
+            ResourceType::ConfigMaps => vec![
+                C::name(50),
+                C::col("DATA", 20),
+                C::col("AGE", 30),
+            ],
+            ResourceType::Secrets => vec![
+                C::name(30),
+                C::col("TYPE", 30),
+                C::col("DATA", 15),
+                C::col("AGE", 25),
+            ],
+            ResourceType::PersistentVolumeClaims => vec![
+                C::name(25),
+                C::status(15),
+                C::col("VOLUME", 25),
+                C::col("CAPACITY", 15),
+                C::col("AGE", 20),
+            ],
+            ResourceType::PersistentVolumes => vec![
+                C::name(25),
+                C::col("CAPACITY", 15),
+                C::status(15),
+                C::col("STORAGECLASS", 25),
+                C::col("AGE", 20),
+            ],
+            ResourceType::StorageClasses => vec![
+                C::name(30),
+                C::col("PROVISIONER", 50),
+                C::col("AGE", 20),
+            ],
+            ResourceType::ServiceAccounts
+            | ResourceType::ResourceQuotas
+            | ResourceType::LimitRanges => vec![
+                C::name(60),
+                C::col("AGE", 40),
+            ],
+            ResourceType::Namespaces => vec![
+                C::name(40),
+                C::status(30),
+                C::col("AGE", 30),
+            ],
+            ResourceType::Nodes => vec![
+                C::name(30),
+                C::status(20),
+                C::col("ROLES", 25),
+                C::col("AGE", 25),
+            ],
+            ResourceType::Events => vec![
+                C::name(20),
+                C::col("TYPE", 10),
+                C::col("REASON", 15),
+                C::col("MESSAGE", 40),
+                C::col("AGE", 15),
+            ],
+            ResourceType::PodDisruptionBudgets => vec![
+                C::name(30),
+                C::col("MIN-AVAILABLE", 25),
+                C::col("MAX-UNAVAILABLE", 25),
+                C::col("AGE", 20),
+            ],
+        };
+
+        if all_namespaces {
+            // Insert NAMESPACE column right after NAME.
+            let ns_col = C::col("NAMESPACE", 15);
+            let insert_pos = defs.iter().position(|d| d.header == "NAME")
+                .map(|i| i + 1)
+                .unwrap_or(1);
+            defs.insert(insert_pos, ns_col);
         }
+
+        defs
     }
 
     /// Returns true if this resource type supports viewing logs.
@@ -209,6 +333,54 @@ pub enum Focus {
     Selector(SelectorTarget),
 }
 
+/// Defines a single column in the resource-list table.
+///
+/// Bundles the header label, a relative width weight, and whether the
+/// column should receive status-aware coloring.
+#[derive(Debug, Clone)]
+pub struct ColumnDef {
+    /// Header label displayed at the top of the column.
+    pub header: &'static str,
+    /// Relative width weight (not a raw percentage). The renderer
+    /// normalises all weights to `Constraint::Percentage` values that
+    /// sum to 100.
+    pub width: u16,
+    /// If true the renderer applies `status_style` colouring to cells
+    /// in this column.
+    pub is_status: bool,
+}
+
+impl ColumnDef {
+    /// A regular (non-status) column.
+    pub const fn col(header: &'static str, width: u16) -> Self {
+        Self { header, width, is_status: false }
+    }
+
+    /// The NAME column (always comes first).
+    pub const fn name(width: u16) -> Self {
+        Self { header: "NAME", width, is_status: false }
+    }
+
+    /// A STATUS column that gets status-aware colouring.
+    pub const fn status(width: u16) -> Self {
+        Self { header: "STATUS", width, is_status: true }
+    }
+
+    /// Convert a slice of [`ColumnDef`] width-weights into normalised
+    /// percentage constraints that sum to 100.
+    pub fn to_constraints(defs: &[ColumnDef]) -> Vec<ratatui::layout::Constraint> {
+        let total: u32 = defs.iter().map(|d| d.width as u32).sum();
+        if total == 0 {
+            return defs.iter().map(|_| ratatui::layout::Constraint::Percentage(0)).collect();
+        }
+        defs.iter()
+            .map(|d| ratatui::layout::Constraint::Percentage(
+                (d.width as u32 * 100 / total) as u16,
+            ))
+            .collect()
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ResourceItem {
     pub name: String,
@@ -220,13 +392,15 @@ pub struct ResourceItem {
 }
 
 impl ResourceItem {
-    /// Returns column values matching the headers for the given resource type.
-    pub fn columns(&self, resource_type: ResourceType) -> Vec<String> {
-        resource_type
-            .column_headers()
-            .iter()
-            .map(|h| {
-                let key = h.to_lowercase();
+    /// Returns column values driven by an arbitrary slice of [`ColumnDef`]s.
+    ///
+    /// This is the primary column-value resolver. The renderer calls it
+    /// with the context-aware defs returned by
+    /// [`ResourceType::column_defs`].
+    pub fn column_values(&self, defs: &[ColumnDef]) -> Vec<String> {
+        defs.iter()
+            .map(|d| {
+                let key = d.header.to_lowercase();
                 match key.as_str() {
                     "name" => self.name.clone(),
                     "status" | "phase" => self.status.clone(),

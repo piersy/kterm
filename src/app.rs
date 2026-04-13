@@ -5,7 +5,7 @@ use ratatui::widgets::TableState;
 
 use crate::types::{
     fuzzy_match, ConfirmAction, Focus, ResourceItem, ResourceType, SearchResult, SelectorTarget,
-    ViewMode,
+    ViewMode, ALL_NAMESPACES_LABEL,
 };
 
 pub struct App {
@@ -103,10 +103,15 @@ impl App {
                 s.insert(0);
                 s
             },
-            namespaces: vec!["default".to_string()],
+            namespaces: vec![
+                ALL_NAMESPACES_LABEL.to_string(),
+                "default".to_string(),
+            ],
             selected_namespaces: {
                 let mut s = HashSet::new();
-                s.insert(0);
+                // Start scoped to "default" (index 1), not the all-namespaces
+                // sentinel at index 0.
+                s.insert(1);
                 s
             },
             preferred_namespace: None,
@@ -227,10 +232,6 @@ impl App {
             }
             DisplayRow::TypeDivider(_) => None,
         }
-    }
-
-    pub fn selected_resource_name(&self) -> Option<String> {
-        self.selected_resource().map(|(r, _)| r.name.clone())
     }
 
     /// Get the resource type of the currently selected row.
@@ -381,6 +382,20 @@ impl App {
             scored.sort_by(|a, b| b.1.cmp(&a.1));
             self.dropdown_filtered = scored.into_iter().map(|(i, _)| i).collect();
         }
+
+        // Pin the "all namespaces" entry to the top of the namespace selector,
+        // regardless of fuzzy-match score. It is always shown so the user can
+        // select cluster-wide scoping at any time.
+        if matches!(self.focus, Focus::Selector(SelectorTarget::Namespace)) {
+            if let Some(all_idx) = items
+                .iter()
+                .position(|it| it == ALL_NAMESPACES_LABEL)
+            {
+                self.dropdown_filtered.retain(|&i| i != all_idx);
+                self.dropdown_filtered.insert(0, all_idx);
+            }
+        }
+
         if self.dropdown_filtered.is_empty() {
             self.dropdown_selected = 0;
         } else {

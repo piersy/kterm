@@ -25,7 +25,20 @@ use serde::Serialize;
 use tokio::sync::mpsc;
 
 use crate::event::AppEvent;
-use crate::types::{ResourceItem, ResourceType};
+use crate::types::{is_all_namespaces, ResourceItem, ResourceType};
+
+/// Build an `Api<T>` for a namespaced type, honoring the "all namespaces"
+/// sentinel. Returns a cluster-wide handle when the sentinel is passed.
+fn ns_api<T>(client: Client, namespace: &str) -> Api<T>
+where
+    T: Resource<DynamicType = (), Scope = kube::core::NamespaceResourceScope>,
+{
+    if is_all_namespaces(namespace) {
+        Api::<T>::all(client)
+    } else {
+        Api::<T>::namespaced(client, namespace)
+    }
+}
 
 /// Timeout for K8s API requests (list, get, describe).
 const K8S_REQUEST_TIMEOUT: Duration = Duration::from_secs(1);
@@ -130,11 +143,11 @@ pub async fn watch_resources(
     let rt = resource_type;
     match resource_type {
         ResourceType::Pods => {
-            watch_generic(Api::<Pod>::namespaced(client, namespace), tx, rt, generation, pod_to_resource_item).await
+            watch_generic(ns_api::<Pod>(client, namespace), tx, rt, generation, pod_to_resource_item).await
         }
         ResourceType::Deployments => {
             watch_generic(
-                Api::<Deployment>::namespaced(client, namespace),
+                ns_api::<Deployment>(client, namespace),
                 tx,
                 rt,
                 generation,
@@ -144,7 +157,7 @@ pub async fn watch_resources(
         }
         ResourceType::StatefulSets => {
             watch_generic(
-                Api::<StatefulSet>::namespaced(client, namespace),
+                ns_api::<StatefulSet>(client, namespace),
                 tx,
                 rt,
                 generation,
@@ -154,7 +167,7 @@ pub async fn watch_resources(
         }
         ResourceType::DaemonSets => {
             watch_generic(
-                Api::<DaemonSet>::namespaced(client, namespace),
+                ns_api::<DaemonSet>(client, namespace),
                 tx,
                 rt,
                 generation,
@@ -164,7 +177,7 @@ pub async fn watch_resources(
         }
         ResourceType::ReplicaSets => {
             watch_generic(
-                Api::<ReplicaSet>::namespaced(client, namespace),
+                ns_api::<ReplicaSet>(client, namespace),
                 tx,
                 rt,
                 generation,
@@ -174,7 +187,7 @@ pub async fn watch_resources(
         }
         ResourceType::ReplicationControllers => {
             watch_generic(
-                Api::<ReplicationController>::namespaced(client, namespace),
+                ns_api::<ReplicationController>(client, namespace),
                 tx,
                 rt,
                 generation,
@@ -183,11 +196,11 @@ pub async fn watch_resources(
             .await
         }
         ResourceType::Jobs => {
-            watch_generic(Api::<Job>::namespaced(client, namespace), tx, rt, generation, job_to_resource_item).await
+            watch_generic(ns_api::<Job>(client, namespace), tx, rt, generation, job_to_resource_item).await
         }
         ResourceType::CronJobs => {
             watch_generic(
-                Api::<CronJob>::namespaced(client, namespace),
+                ns_api::<CronJob>(client, namespace),
                 tx,
                 rt,
                 generation,
@@ -197,7 +210,7 @@ pub async fn watch_resources(
         }
         ResourceType::HorizontalPodAutoscalers => {
             watch_generic(
-                Api::<HorizontalPodAutoscaler>::namespaced(client, namespace),
+                ns_api::<HorizontalPodAutoscaler>(client, namespace),
                 tx,
                 rt,
                 generation,
@@ -207,7 +220,7 @@ pub async fn watch_resources(
         }
         ResourceType::Services => {
             watch_generic(
-                Api::<Service>::namespaced(client, namespace),
+                ns_api::<Service>(client, namespace),
                 tx,
                 rt,
                 generation,
@@ -217,7 +230,7 @@ pub async fn watch_resources(
         }
         ResourceType::Endpoints => {
             watch_generic(
-                Api::<Endpoints>::namespaced(client, namespace),
+                ns_api::<Endpoints>(client, namespace),
                 tx,
                 rt,
                 generation,
@@ -227,7 +240,7 @@ pub async fn watch_resources(
         }
         ResourceType::Ingresses => {
             watch_generic(
-                Api::<Ingress>::namespaced(client, namespace),
+                ns_api::<Ingress>(client, namespace),
                 tx,
                 rt,
                 generation,
@@ -237,7 +250,7 @@ pub async fn watch_resources(
         }
         ResourceType::NetworkPolicies => {
             watch_generic(
-                Api::<NetworkPolicy>::namespaced(client, namespace),
+                ns_api::<NetworkPolicy>(client, namespace),
                 tx,
                 rt,
                 generation,
@@ -247,7 +260,7 @@ pub async fn watch_resources(
         }
         ResourceType::ConfigMaps => {
             watch_generic(
-                Api::<ConfigMap>::namespaced(client, namespace),
+                ns_api::<ConfigMap>(client, namespace),
                 tx,
                 rt,
                 generation,
@@ -257,7 +270,7 @@ pub async fn watch_resources(
         }
         ResourceType::Secrets => {
             watch_generic(
-                Api::<Secret>::namespaced(client, namespace),
+                ns_api::<Secret>(client, namespace),
                 tx,
                 rt,
                 generation,
@@ -267,7 +280,7 @@ pub async fn watch_resources(
         }
         ResourceType::PersistentVolumeClaims => {
             watch_generic(
-                Api::<PersistentVolumeClaim>::namespaced(client, namespace),
+                ns_api::<PersistentVolumeClaim>(client, namespace),
                 tx,
                 rt,
                 generation,
@@ -290,7 +303,7 @@ pub async fn watch_resources(
         }
         ResourceType::ServiceAccounts => {
             watch_generic(
-                Api::<ServiceAccount>::namespaced(client, namespace),
+                ns_api::<ServiceAccount>(client, namespace),
                 tx,
                 rt,
                 generation,
@@ -306,7 +319,7 @@ pub async fn watch_resources(
         }
         ResourceType::Events => {
             watch_generic(
-                Api::<Event>::namespaced(client, namespace),
+                ns_api::<Event>(client, namespace),
                 tx,
                 rt,
                 generation,
@@ -316,7 +329,7 @@ pub async fn watch_resources(
         }
         ResourceType::ResourceQuotas => {
             watch_generic(
-                Api::<ResourceQuota>::namespaced(client, namespace),
+                ns_api::<ResourceQuota>(client, namespace),
                 tx,
                 rt,
                 generation,
@@ -326,7 +339,7 @@ pub async fn watch_resources(
         }
         ResourceType::LimitRanges => {
             watch_generic(
-                Api::<LimitRange>::namespaced(client, namespace),
+                ns_api::<LimitRange>(client, namespace),
                 tx,
                 rt,
                 generation,
@@ -336,7 +349,7 @@ pub async fn watch_resources(
         }
         ResourceType::PodDisruptionBudgets => {
             watch_generic(
-                Api::<PodDisruptionBudget>::namespaced(client, namespace),
+                ns_api::<PodDisruptionBudget>(client, namespace),
                 tx,
                 rt,
                 generation,
@@ -484,31 +497,31 @@ pub async fn count_all_resources(
         configmaps, secrets, pvcs, pvs, storageclasses, serviceaccounts,
         namespaces, nodes, events, resourcequotas, limitranges, pdbs,
     ) = join!(
-        count_generic(Api::<Pod>::namespaced(client.clone(), namespace)),
-        count_generic(Api::<Deployment>::namespaced(client.clone(), namespace)),
-        count_generic(Api::<StatefulSet>::namespaced(client.clone(), namespace)),
-        count_generic(Api::<DaemonSet>::namespaced(client.clone(), namespace)),
-        count_generic(Api::<ReplicaSet>::namespaced(client.clone(), namespace)),
-        count_generic(Api::<ReplicationController>::namespaced(client.clone(), namespace)),
-        count_generic(Api::<Job>::namespaced(client.clone(), namespace)),
-        count_generic(Api::<CronJob>::namespaced(client.clone(), namespace)),
-        count_generic(Api::<HorizontalPodAutoscaler>::namespaced(client.clone(), namespace)),
-        count_generic(Api::<Service>::namespaced(client.clone(), namespace)),
-        count_generic(Api::<Endpoints>::namespaced(client.clone(), namespace)),
-        count_generic(Api::<Ingress>::namespaced(client.clone(), namespace)),
-        count_generic(Api::<NetworkPolicy>::namespaced(client.clone(), namespace)),
-        count_generic(Api::<ConfigMap>::namespaced(client.clone(), namespace)),
-        count_generic(Api::<Secret>::namespaced(client.clone(), namespace)),
-        count_generic(Api::<PersistentVolumeClaim>::namespaced(client.clone(), namespace)),
+        count_generic(ns_api::<Pod>(client.clone(), namespace)),
+        count_generic(ns_api::<Deployment>(client.clone(), namespace)),
+        count_generic(ns_api::<StatefulSet>(client.clone(), namespace)),
+        count_generic(ns_api::<DaemonSet>(client.clone(), namespace)),
+        count_generic(ns_api::<ReplicaSet>(client.clone(), namespace)),
+        count_generic(ns_api::<ReplicationController>(client.clone(), namespace)),
+        count_generic(ns_api::<Job>(client.clone(), namespace)),
+        count_generic(ns_api::<CronJob>(client.clone(), namespace)),
+        count_generic(ns_api::<HorizontalPodAutoscaler>(client.clone(), namespace)),
+        count_generic(ns_api::<Service>(client.clone(), namespace)),
+        count_generic(ns_api::<Endpoints>(client.clone(), namespace)),
+        count_generic(ns_api::<Ingress>(client.clone(), namespace)),
+        count_generic(ns_api::<NetworkPolicy>(client.clone(), namespace)),
+        count_generic(ns_api::<ConfigMap>(client.clone(), namespace)),
+        count_generic(ns_api::<Secret>(client.clone(), namespace)),
+        count_generic(ns_api::<PersistentVolumeClaim>(client.clone(), namespace)),
         count_generic(Api::<PersistentVolume>::all(client.clone())),
         count_generic(Api::<StorageClass>::all(client.clone())),
-        count_generic(Api::<ServiceAccount>::namespaced(client.clone(), namespace)),
+        count_generic(ns_api::<ServiceAccount>(client.clone(), namespace)),
         count_generic(Api::<Namespace>::all(client.clone())),
         count_generic(Api::<Node>::all(client.clone())),
-        count_generic(Api::<Event>::namespaced(client.clone(), namespace)),
-        count_generic(Api::<ResourceQuota>::namespaced(client.clone(), namespace)),
-        count_generic(Api::<LimitRange>::namespaced(client.clone(), namespace)),
-        count_generic(Api::<PodDisruptionBudget>::namespaced(client.clone(), namespace)),
+        count_generic(ns_api::<Event>(client.clone(), namespace)),
+        count_generic(ns_api::<ResourceQuota>(client.clone(), namespace)),
+        count_generic(ns_api::<LimitRange>(client.clone(), namespace)),
+        count_generic(ns_api::<PodDisruptionBudget>(client.clone(), namespace)),
     );
 
     let mut counts = HashMap::new();

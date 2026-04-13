@@ -1,10 +1,10 @@
-use ratatui::layout::{Constraint, Rect};
+use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::widgets::{Block, Borders, Cell, Row, Table};
 use ratatui::Frame;
 
 use crate::app::{App, DisplayRow};
-use crate::types::ResourceType;
+use crate::types::{is_all_namespaces, ColumnDef};
 
 pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
     let display_rows = app.display_rows();
@@ -21,12 +21,13 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
 
 fn render_single_type(frame: &mut Frame, app: &mut App, area: Rect) {
     let resource_type = app.primary_resource_type();
-    let headers = resource_type.column_headers();
+    let all_ns = is_all_namespaces(app.current_namespace());
+    let defs = resource_type.column_defs(all_ns);
 
-    let header_cells: Vec<Cell> = headers
+    let header_cells: Vec<Cell> = defs
         .iter()
-        .map(|h| {
-            Cell::from(*h).style(
+        .map(|d| {
+            Cell::from(d.header).style(
                 Style::default()
                     .fg(Color::Yellow)
                     .add_modifier(Modifier::BOLD),
@@ -53,12 +54,12 @@ fn render_single_type(frame: &mut Frame, app: &mut App, area: Rect) {
     let rows: Vec<Row> = filtered
         .iter()
         .map(|item| {
-            let cols = item.columns(resource_type);
+            let cols = item.column_values(&defs);
             let cells: Vec<Cell> = cols
                 .into_iter()
                 .enumerate()
                 .map(|(i, val)| {
-                    let style = if i == 1 {
+                    let style = if defs.get(i).is_some_and(|d| d.is_status) {
                         status_style(&val)
                     } else {
                         Style::default()
@@ -70,7 +71,7 @@ fn render_single_type(frame: &mut Frame, app: &mut App, area: Rect) {
         })
         .collect();
 
-    let widths = column_widths(resource_type);
+    let widths = ColumnDef::to_constraints(&defs);
 
     let title = if app.filter.is_empty() {
         format!(" {} ", resource_type)
@@ -101,12 +102,13 @@ fn render_single_type(frame: &mut Frame, app: &mut App, area: Rect) {
 fn render_multi_type(frame: &mut Frame, app: &mut App, area: Rect, display_rows: &[DisplayRow]) {
     // For multi-type display, we use a single table with variable-width columns.
     // Divider rows span the full width. Resource rows use a generic column layout.
-    // We use a NAME + STATUS + AGE layout for mixed types.
-    let generic_headers = ["TYPE", "NAME", "STATUS", "AGE"];
-    let header_cells: Vec<Cell> = generic_headers
+    let all_ns = is_all_namespaces(app.current_namespace());
+    let defs = multi_type_column_defs(all_ns);
+
+    let header_cells: Vec<Cell> = defs
         .iter()
-        .map(|h| {
-            Cell::from(*h).style(
+        .map(|d| {
+            Cell::from(d.header).style(
                 Style::default()
                     .fg(Color::Yellow)
                     .add_modifier(Modifier::BOLD),
@@ -114,6 +116,8 @@ fn render_multi_type(frame: &mut Frame, app: &mut App, area: Rect, display_rows:
         })
         .collect();
     let header_row = Row::new(header_cells).height(1);
+
+    let n_cols = defs.len();
 
     let rows: Vec<Row> = display_rows
         .iter()
@@ -126,7 +130,11 @@ fn render_multi_type(frame: &mut Frame, app: &mut App, area: Rect, display_rows:
                         .fg(Color::Cyan)
                         .add_modifier(Modifier::BOLD),
                 );
-                Row::new(vec![cell, Cell::from(""), Cell::from(""), Cell::from("")])
+                let mut cells = vec![cell];
+                for _ in 1..n_cols {
+                    cells.push(Cell::from(""));
+                }
+                Row::new(cells)
                     .height(1)
                     .style(Style::default().fg(Color::DarkGray))
             }
@@ -136,13 +144,18 @@ fn render_multi_type(frame: &mut Frame, app: &mut App, area: Rect, display_rows:
             } => {
                 let items = app.resources_by_type.get(resource_type);
                 if let Some(item) = items.and_then(|v| v.get(*index)) {
-                    let cells = vec![
+                    let mut cells = vec![
                         Cell::from(resource_type.to_string())
                             .style(Style::default().fg(Color::DarkGray)),
                         Cell::from(item.name.clone()),
-                        Cell::from(item.status.clone()).style(status_style(&item.status)),
-                        Cell::from(item.age.clone()),
                     ];
+                    if all_ns {
+                        cells.push(Cell::from(item.namespace.clone()));
+                    }
+                    cells.push(
+                        Cell::from(item.status.clone()).style(status_style(&item.status)),
+                    );
+                    cells.push(Cell::from(item.age.clone()));
                     Row::new(cells).height(1)
                 } else {
                     Row::new(vec![Cell::from("?")]).height(1)
@@ -151,12 +164,7 @@ fn render_multi_type(frame: &mut Frame, app: &mut App, area: Rect, display_rows:
         })
         .collect();
 
-    let widths = vec![
-        Constraint::Percentage(15),
-        Constraint::Percentage(35),
-        Constraint::Percentage(25),
-        Constraint::Percentage(25),
-    ];
+    let widths = ColumnDef::to_constraints(&defs);
 
     let types_display: String = app
         .selected_resource_types
@@ -190,136 +198,18 @@ fn render_multi_type(frame: &mut Frame, app: &mut App, area: Rect, display_rows:
     frame.render_stateful_widget(table, area, &mut app.table_state);
 }
 
-fn column_widths(resource_type: ResourceType) -> Vec<Constraint> {
-    match resource_type {
-        ResourceType::Pods => vec![
-            Constraint::Percentage(30),
-            Constraint::Percentage(15),
-            Constraint::Percentage(15),
-            Constraint::Percentage(15),
-            Constraint::Percentage(25),
-        ],
-        ResourceType::Deployments => vec![
-            Constraint::Percentage(30),
-            Constraint::Percentage(15),
-            Constraint::Percentage(20),
-            Constraint::Percentage(20),
-            Constraint::Percentage(15),
-        ],
-        ResourceType::StatefulSets => vec![
-            Constraint::Percentage(40),
-            Constraint::Percentage(30),
-            Constraint::Percentage(30),
-        ],
-        ResourceType::DaemonSets
-        | ResourceType::ReplicaSets
-        | ResourceType::ReplicationControllers => vec![
-            Constraint::Percentage(30),
-            Constraint::Percentage(15),
-            Constraint::Percentage(15),
-            Constraint::Percentage(15),
-            Constraint::Percentage(25),
-        ],
-        ResourceType::Jobs => vec![
-            Constraint::Percentage(40),
-            Constraint::Percentage(30),
-            Constraint::Percentage(30),
-        ],
-        ResourceType::CronJobs => vec![
-            Constraint::Percentage(25),
-            Constraint::Percentage(25),
-            Constraint::Percentage(15),
-            Constraint::Percentage(15),
-            Constraint::Percentage(20),
-        ],
-        ResourceType::HorizontalPodAutoscalers => vec![
-            Constraint::Percentage(30),
-            Constraint::Percentage(15),
-            Constraint::Percentage(15),
-            Constraint::Percentage(15),
-            Constraint::Percentage(25),
-        ],
-        ResourceType::Services => vec![
-            Constraint::Percentage(25),
-            Constraint::Percentage(15),
-            Constraint::Percentage(20),
-            Constraint::Percentage(25),
-            Constraint::Percentage(15),
-        ],
-        ResourceType::Endpoints => vec![
-            Constraint::Percentage(30),
-            Constraint::Percentage(50),
-            Constraint::Percentage(20),
-        ],
-        ResourceType::Ingresses => vec![
-            Constraint::Percentage(25),
-            Constraint::Percentage(20),
-            Constraint::Percentage(35),
-            Constraint::Percentage(20),
-        ],
-        ResourceType::NetworkPolicies => vec![
-            Constraint::Percentage(30),
-            Constraint::Percentage(50),
-            Constraint::Percentage(20),
-        ],
-        ResourceType::ConfigMaps => vec![
-            Constraint::Percentage(50),
-            Constraint::Percentage(20),
-            Constraint::Percentage(30),
-        ],
-        ResourceType::Secrets => vec![
-            Constraint::Percentage(30),
-            Constraint::Percentage(30),
-            Constraint::Percentage(15),
-            Constraint::Percentage(25),
-        ],
-        ResourceType::PersistentVolumeClaims => vec![
-            Constraint::Percentage(25),
-            Constraint::Percentage(15),
-            Constraint::Percentage(25),
-            Constraint::Percentage(15),
-            Constraint::Percentage(20),
-        ],
-        ResourceType::PersistentVolumes => vec![
-            Constraint::Percentage(25),
-            Constraint::Percentage(15),
-            Constraint::Percentage(15),
-            Constraint::Percentage(25),
-            Constraint::Percentage(20),
-        ],
-        ResourceType::StorageClasses => vec![
-            Constraint::Percentage(30),
-            Constraint::Percentage(50),
-            Constraint::Percentage(20),
-        ],
-        ResourceType::ServiceAccounts
-        | ResourceType::ResourceQuotas
-        | ResourceType::LimitRanges => vec![Constraint::Percentage(60), Constraint::Percentage(40)],
-        ResourceType::Namespaces => vec![
-            Constraint::Percentage(40),
-            Constraint::Percentage(30),
-            Constraint::Percentage(30),
-        ],
-        ResourceType::Nodes => vec![
-            Constraint::Percentage(30),
-            Constraint::Percentage(20),
-            Constraint::Percentage(25),
-            Constraint::Percentage(25),
-        ],
-        ResourceType::Events => vec![
-            Constraint::Percentage(20),
-            Constraint::Percentage(10),
-            Constraint::Percentage(15),
-            Constraint::Percentage(40),
-            Constraint::Percentage(15),
-        ],
-        ResourceType::PodDisruptionBudgets => vec![
-            Constraint::Percentage(30),
-            Constraint::Percentage(25),
-            Constraint::Percentage(25),
-            Constraint::Percentage(20),
-        ],
+/// Column definitions for the generic multi-type table.
+fn multi_type_column_defs(all_namespaces: bool) -> Vec<ColumnDef> {
+    let mut defs = vec![
+        ColumnDef::col("TYPE", 15),
+        ColumnDef::name(35),
+    ];
+    if all_namespaces {
+        defs.push(ColumnDef::col("NAMESPACE", 15));
     }
+    defs.push(ColumnDef { header: "STATUS", width: 25, is_status: true });
+    defs.push(ColumnDef::col("AGE", 25));
+    defs
 }
 
 fn status_style(status: &str) -> Style {

@@ -400,8 +400,19 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                             h.abort();
                         }
 
-                        let name = app.selected_resource_name().unwrap_or_default();
-                        let ns = app.current_namespace().to_string();
+                        // Use the pod's own namespace so the stream works
+                        // when the "all namespaces" option is selected.
+                        let (name, ns) = match app.selected_resource() {
+                            Some((res, _)) => {
+                                let ns = if res.namespace.is_empty() {
+                                    app.current_namespace().to_string()
+                                } else {
+                                    res.namespace.clone()
+                                };
+                                (res.name.clone(), ns)
+                            }
+                            None => continue,
+                        };
                         let mgr = k8s_manager.clone();
                         let action_tx = tx.clone();
 
@@ -438,14 +449,23 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                         }
                     }
                     InputAction::Delete => {
-                        let (name, rt) = {
+                        let (name, ns, rt) = {
                             if let Some((res, rt)) = app.selected_resource() {
-                                (res.name.clone(), rt)
+                                (res.name.clone(), res.namespace.clone(), rt)
                             } else {
                                 continue;
                             }
                         };
-                        let ns = app.current_namespace().to_string();
+                        // Fall back to the current namespace only when the
+                        // resource has no namespace of its own (cluster-scoped
+                        // types). For namespaced types this keeps Delete
+                        // correct even when the "all namespaces" selector
+                        // option is active.
+                        let ns = if ns.is_empty() {
+                            app.current_namespace().to_string()
+                        } else {
+                            ns
+                        };
                         let mgr = k8s_manager.clone();
                         let action_tx = tx.clone();
 
@@ -467,14 +487,21 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                         });
                     }
                     InputAction::Restart => {
-                        let (name, rt) = {
+                        let (name, ns, rt) = {
                             if let Some((res, rt)) = app.selected_resource() {
-                                (res.name.clone(), rt)
+                                (res.name.clone(), res.namespace.clone(), rt)
                             } else {
                                 continue;
                             }
                         };
-                        let ns = app.current_namespace().to_string();
+                        // Use the resource's own namespace so Restart works
+                        // correctly when the "all namespaces" option is
+                        // selected.
+                        let ns = if ns.is_empty() {
+                            app.current_namespace().to_string()
+                        } else {
+                            ns
+                        };
                         let mgr = k8s_manager.clone();
                         let action_tx = tx.clone();
 
@@ -530,14 +557,27 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                                     None
                                 }
                             } else {
-                                let guard = k8s_manager.lock().await;
-                                guard.as_ref().map(|mgr| {
-                                    (
-                                        mgr.client.clone(),
+                                // Use the pod's own namespace so the live log
+                                // tail works when "all namespaces" is the
+                                // selected namespace option.
+                                let (pod_ns, pod_name) = match app.selected_resource() {
+                                    Some((res, _)) => {
+                                        let ns = if res.namespace.is_empty() {
+                                            app.current_namespace().to_string()
+                                        } else {
+                                            res.namespace.clone()
+                                        };
+                                        (ns, res.name.clone())
+                                    }
+                                    None => (
                                         app.current_namespace().to_string(),
-                                        app.selected_resource_name().unwrap_or_default(),
-                                    )
-                                })
+                                        String::new(),
+                                    ),
+                                };
+                                let guard = k8s_manager.lock().await;
+                                guard
+                                    .as_ref()
+                                    .map(|mgr| (mgr.client.clone(), pod_ns, pod_name))
                             };
 
                             events.suspend();
@@ -571,7 +611,14 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                         if let Some((resource, rt)) = app.selected_resource() {
                             let yaml = resource.raw_yaml.clone();
                             let name = resource.name.clone();
-                            let ns = app.current_namespace().to_string();
+                            // Use the resource's own namespace so edits apply
+                            // to the correct namespace when "all namespaces"
+                            // is selected.
+                            let ns = if resource.namespace.is_empty() {
+                                app.current_namespace().to_string()
+                            } else {
+                                resource.namespace.clone()
+                            };
                             let mgr = k8s_manager.clone();
                             let action_tx = tx.clone();
 
@@ -796,18 +843,27 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                 }
             }
             AppEvent::NamespacesLoaded(namespaces) => {
-                app.namespaces = namespaces;
+                // Prepend the "all namespaces" sentinel so it's always the
+                // first entry and can be selected from the dropdown.
+                let mut with_all = Vec::with_capacity(namespaces.len() + 1);
+                with_all.push(types::ALL_NAMESPACES_LABEL.to_string());
+                with_all.extend(namespaces);
+                app.namespaces = with_all;
+
+                // Default to the first real namespace (index 1), falling back
+                // to the sentinel (index 0) if the cluster returned none.
+                let default_idx = if app.namespaces.len() > 1 { 1 } else { 0 };
                 if let Some(ref pref) = app.preferred_namespace {
                     if let Some(idx) = app.namespaces.iter().position(|n| n == pref) {
                         app.selected_namespaces.clear();
                         app.selected_namespaces.insert(idx);
                     } else {
                         app.selected_namespaces.clear();
-                        app.selected_namespaces.insert(0);
+                        app.selected_namespaces.insert(default_idx);
                     }
                 } else {
                     app.selected_namespaces.clear();
-                    app.selected_namespaces.insert(0);
+                    app.selected_namespaces.insert(default_idx);
                 }
                 app.loading = false;
                 if let types::Focus::Selector(types::SelectorTarget::Namespace) = app.focus {
