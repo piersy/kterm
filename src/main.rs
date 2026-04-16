@@ -118,19 +118,27 @@ fn start_watchers(
     }
 }
 
-/// Start a resource count fetch task, tracked in watcher_handles.
+/// Spawn a resource count fetch task.
+///
+/// Returns the spawned [`JoinHandle`] so the caller can store it separately
+/// from watcher handles. Count fetches are namespace-scoped (not
+/// type-scoped) and therefore must survive resource-type changes — they are
+/// only aborted on context/namespace changes.
+///
+/// The returned event carries the `(context, namespace)` the counts were
+/// fetched for so stale results from a previous cluster/namespace can be
+/// discarded by the main loop.
 fn start_count_fetch(
     app: &App,
     k8s_manager: &std::sync::Arc<tokio::sync::Mutex<Option<k8s::client::K8sManager>>>,
     tx: &tokio::sync::mpsc::UnboundedSender<AppEvent>,
     ns: &str,
-    watcher_handles: &mut Vec<tokio::task::JoinHandle<()>>,
-) {
+) -> tokio::task::JoinHandle<()> {
     let mgr = k8s_manager.clone();
     let count_tx = tx.clone();
     let count_ns = ns.to_string();
-    let generation = app.generation;
-    let handle = tokio::spawn(async move {
+    let context = app.current_context().to_string();
+    tokio::spawn(async move {
         let guard = mgr.lock().await;
         if let Some(ref manager) = *guard {
             let client = manager.client.clone();
@@ -140,12 +148,12 @@ fn start_count_fetch(
                 &count_tx,
                 AppEvent::ResourceCountsLoaded {
                     counts,
-                    generation,
+                    context,
+                    namespace: count_ns,
                 },
             );
         }
-    });
-    watcher_handles.push(handle);
+    })
 }
 
 async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
@@ -224,10 +232,13 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
         }
     });
 
-    // Track ALL watcher/count tasks so they can be properly aborted
+    // Track watcher tasks (aborted on context/namespace/type changes) and
+    // the count-fetch task (aborted only on context/namespace changes —
+    // counts are namespace-scoped and must survive type changes).
     let mut watcher_handles: Vec<tokio::task::JoinHandle<()>> = Vec::new();
     let mut active_watch_types: std::collections::HashSet<types::ResourceType> =
         std::collections::HashSet::new();
+    let mut count_fetch_handle: Option<tokio::task::JoinHandle<()>> = None;
     let mut log_stream_handle: Option<tokio::task::JoinHandle<()>> = None;
 
     loop {
@@ -253,11 +264,17 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
 
                         app.next_generation();
                         abort_all_watchers(&mut watcher_handles, &mut active_watch_types);
+                        if let Some(h) = count_fetch_handle.take() {
+                            h.abort();
+                        }
                         if let Some(h) = log_stream_handle.take() {
                             h.abort();
                         }
                         app.loading = true;
                         app.resources_by_type.clear();
+                        // Clear counts — they were for the previous context.
+                        // A new count fetch will be started on ContextSwitchReady.
+                        app.resource_counts.clear();
 
                         // Async context switch + namespace list; then signal main loop.
                         // On success, mark the cluster as reachable (clears unreachable status).
@@ -325,6 +342,9 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                     InputAction::NamespaceChanged => {
                         app.next_generation();
                         abort_all_watchers(&mut watcher_handles, &mut active_watch_types);
+                        if let Some(h) = count_fetch_handle.take() {
+                            h.abort();
+                        }
                         if let Some(h) = log_stream_handle.take() {
                             h.abort();
                         }
@@ -334,36 +354,25 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                         app.select_first_row();
 
                         let ns = app.current_namespace().to_string();
-                        start_count_fetch(
+                        count_fetch_handle = Some(start_count_fetch(
                             &app,
                             &k8s_manager,
                             &tx,
                             &ns,
-                            &mut watcher_handles,
-                        );
+                        ));
                         start_watchers(&app, &k8s_manager, &tx, &mut watcher_handles, &mut active_watch_types);
                     }
                     InputAction::ResourceTypeChanged => {
+                        // Only watchers (which are type-scoped) need to be
+                        // aborted here. The count fetch is namespace-scoped
+                        // and is deliberately left running so that its
+                        // results can populate the type selector.
                         app.next_generation();
                         abort_all_watchers(&mut watcher_handles, &mut active_watch_types);
                         app.loading = true;
                         app.resources_by_type.clear();
                         app.select_first_row();
 
-                        // Re-fetch counts if the previous count fetch was
-                        // aborted (e.g. user switched types before the initial
-                        // fetch completed). The generation increment above
-                        // ensures stale in-flight events are discarded.
-                        if app.resource_counts.is_empty() {
-                            let ns = app.current_namespace().to_string();
-                            start_count_fetch(
-                                &app,
-                                &k8s_manager,
-                                &tx,
-                                &ns,
-                                &mut watcher_handles,
-                            );
-                        }
                         start_watchers(&app, &k8s_manager, &tx, &mut watcher_handles, &mut active_watch_types);
                     }
                     InputAction::Describe => {
@@ -965,14 +974,20 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                     });
                 }
 
-                // Start initial resource watchers (all tracked)
+                // Start initial resource watchers and count fetch.
                 abort_all_watchers(&mut watcher_handles, &mut active_watch_types);
+                if let Some(h) = count_fetch_handle.take() {
+                    h.abort();
+                }
                 let ns = app.current_namespace().to_string();
-                start_count_fetch(&app, &k8s_manager, &tx, &ns, &mut watcher_handles);
+                count_fetch_handle = Some(start_count_fetch(&app, &k8s_manager, &tx, &ns));
                 start_watchers(&app, &k8s_manager, &tx, &mut watcher_handles, &mut active_watch_types);
             }
-            AppEvent::ResourceCountsLoaded { counts, generation } => {
-                if generation != app.generation {
+            AppEvent::ResourceCountsLoaded { counts, context, namespace } => {
+                // Discard counts fetched for a different context/namespace.
+                // Counts are namespace-scoped, so type changes do NOT
+                // invalidate them — only context or namespace changes do.
+                if context != app.current_context() || namespace != app.current_namespace() {
                     continue;
                 }
                 app.resource_counts = counts;
@@ -982,10 +997,13 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                 }
             }
             AppEvent::ContextSwitchReady => {
-                // Context switch async work is done; start watchers from main loop
-                // so all handles are tracked.
+                // Context switch async work is done; start watchers and
+                // count fetch from main loop so handles are tracked.
+                if let Some(h) = count_fetch_handle.take() {
+                    h.abort();
+                }
                 let ns = app.current_namespace().to_string();
-                start_count_fetch(&app, &k8s_manager, &tx, &ns, &mut watcher_handles);
+                count_fetch_handle = Some(start_count_fetch(&app, &k8s_manager, &tx, &ns));
                 start_watchers(&app, &k8s_manager, &tx, &mut watcher_handles, &mut active_watch_types);
             }
             AppEvent::K8sError(msg) => {

@@ -43,7 +43,12 @@ pub enum AppEvent {
     },
     ResourceCountsLoaded {
         counts: HashMap<ResourceType, usize>,
-        generation: u64,
+        /// Context the counts were fetched for. Used to discard stale
+        /// counts after a context switch.
+        context: String,
+        /// Namespace the counts were fetched for. Used to discard stale
+        /// counts after a namespace switch.
+        namespace: String,
     },
     /// Context switch completed; main loop should start watchers.
     ContextSwitchReady,
