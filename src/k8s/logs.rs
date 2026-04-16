@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use anyhow::{Context, Result};
 use futures::AsyncBufReadExt;
 use futures::TryStreamExt;
@@ -9,8 +7,7 @@ use kube::{Api, Client};
 use tokio::sync::mpsc;
 
 use crate::event::{self, AppEvent};
-
-pub const LOG_STREAM_CONNECT_TIMEOUT: Duration = Duration::from_secs(1);
+use crate::k8s::K8S_TIMEOUT;
 
 pub async fn stream_pod_logs(
     client: Client,
@@ -32,7 +29,7 @@ pub async fn stream_pod_logs(
     }
 
     let stream = tokio::time::timeout(
-        LOG_STREAM_CONNECT_TIMEOUT,
+        K8S_TIMEOUT,
         api.log_stream(pod_name, &params),
     )
     .await
@@ -59,7 +56,7 @@ mod tests {
 
     #[test]
     fn test_log_stream_timeout_is_reasonable() {
-        assert!(LOG_STREAM_CONNECT_TIMEOUT.as_secs() >= 1);
-        assert!(LOG_STREAM_CONNECT_TIMEOUT.as_secs() <= 5);
+        assert!(K8S_TIMEOUT.as_secs() >= 1);
+        assert!(K8S_TIMEOUT.as_secs() <= 5);
     }
 }

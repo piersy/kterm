@@ -947,7 +947,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                             Ok(client) => {
                                 // Use /version endpoint: no RBAC needed, no etcd hit, tiny response.
                                 tokio::time::timeout(
-                                    std::time::Duration::from_secs(3),
+                                    k8s::K8S_TIMEOUT,
                                     client.apiserver_version(),
                                 )
                                 .await
