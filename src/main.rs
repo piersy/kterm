@@ -675,6 +675,34 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                             }
                         }
                     }
+                    InputAction::Exec => {
+                        if let Some((resource, rt)) = app.selected_resource() {
+                            if rt.supports_exec() {
+                                let name = resource.name.clone();
+                                let ns = if resource.namespace.is_empty() {
+                                    app.current_namespace().to_string()
+                                } else {
+                                    resource.namespace.clone()
+                                };
+                                let context = app.current_context().to_string();
+
+                                events.suspend();
+                                disable_raw_mode()?;
+                                execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+
+                                let exec_result = exec_into_pod(&context, &ns, &name);
+
+                                execute!(terminal.backend_mut(), EnterAlternateScreen)?;
+                                enable_raw_mode()?;
+                                terminal.clear()?;
+                                events.resume();
+
+                                if let Err(e) = exec_result {
+                                    app.set_error(format!("Exec error: {}", e));
+                                }
+                            }
+                        }
+                    }
                     InputAction::StartSearch => {
                         let contexts = app.contexts.clone();
                         let unreachable = app.unreachable_contexts.clone();
@@ -1198,6 +1226,52 @@ fn strip_managed_fields(yaml: &str) -> String {
         serde_yaml::to_string(&value).unwrap_or_else(|_| yaml.to_string())
     } else {
         yaml.to_string()
+    }
+}
+
+/// Spawn an interactive shell inside a pod via `kubectl exec -it`.
+///
+/// kubectl handles PTY allocation, raw-mode, SIGWINCH forwarding, and writing
+/// stdin/stdout over the websocket — implementing that directly against
+/// kube-rs would be substantially more code. The caller is responsible for
+/// leaving the alternate screen and disabling crossterm's raw mode before
+/// calling this.
+fn exec_into_pod(context: &str, namespace: &str, pod: &str) -> Result<()> {
+    // SIGINT is ignored so ^C in the remote shell (during the brief window
+    // when the terminal isn't yet in kubectl's raw mode, or after kubectl
+    // restores it) doesn't also kill kterm. Same pattern as
+    // `open_logs_in_less`.
+    unsafe {
+        libc::signal(libc::SIGINT, libc::SIG_IGN);
+    }
+
+    // Try bash, fall back to sh — same trick used by kubectl's docs/k9s.
+    let status = std::process::Command::new("kubectl")
+        .arg("exec")
+        .arg("-it")
+        .arg("--context")
+        .arg(context)
+        .arg("-n")
+        .arg(namespace)
+        .arg(pod)
+        .arg("--")
+        .arg("sh")
+        .arg("-c")
+        .arg("command -v bash >/dev/null 2>&1 && exec bash || exec sh")
+        .status();
+
+    unsafe {
+        libc::signal(libc::SIGINT, libc::SIG_DFL);
+    }
+
+    match status {
+        Ok(_) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            anyhow::bail!(
+                "`kubectl` not found on PATH — install it to use exec"
+            )
+        }
+        Err(e) => Err(e.into()),
     }
 }
 

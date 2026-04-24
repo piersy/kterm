@@ -238,6 +238,11 @@ impl ResourceType {
         matches!(self, ResourceType::Pods)
     }
 
+    /// Returns true if this resource type supports `exec` into a container.
+    pub fn supports_exec(&self) -> bool {
+        matches!(self, ResourceType::Pods)
+    }
+
     /// Returns true if this resource type supports restart.
     pub fn supports_restart(&self) -> bool {
         matches!(
