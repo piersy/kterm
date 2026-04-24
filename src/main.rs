@@ -688,11 +688,19 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
 
                                 events.suspend();
                                 disable_raw_mode()?;
-                                execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+                                // Stay in the alternate screen and wipe it so
+                                // the pod's shell prompt lands at the top of
+                                // a blank window, instead of falling through
+                                // to whatever was in the user's terminal
+                                // before kterm started.
+                                execute!(
+                                    terminal.backend_mut(),
+                                    Clear(ClearType::All),
+                                    crossterm::cursor::MoveTo(0, 0),
+                                )?;
 
                                 let exec_result = exec_into_pod(&context, &ns, &name);
 
-                                execute!(terminal.backend_mut(), EnterAlternateScreen)?;
                                 enable_raw_mode()?;
                                 terminal.clear()?;
                                 events.resume();
