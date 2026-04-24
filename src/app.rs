@@ -1,3 +1,4 @@
+use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -281,7 +282,7 @@ impl App {
                     fuzzy_match(&self.search_query, &r.resource.name).map(|score| (i, score))
                 })
                 .collect();
-            scored.sort_by(|a, b| b.1.cmp(&a.1));
+            scored.sort_by_key(|s| Reverse(s.1));
             self.search_filtered = scored.into_iter().map(|(i, _)| i).collect();
         }
         if self.search_filtered.is_empty() {
@@ -329,16 +330,29 @@ impl App {
                 .iter()
                 .enumerate()
                 .filter_map(|(i, t)| {
-                    let count = self.resource_counts.get(t).copied().unwrap_or(0);
-                    if count > 0 || self.selected_resource_types.contains(t) {
-                        let label = if count > 0 {
-                            format!("{} ({})", t, count)
-                        } else {
-                            t.to_string()
-                        };
-                        Some((label, i))
-                    } else {
-                        None
+                    // Distinguish between:
+                    //   Some(n) where n > 0 : type has resources -> show with count
+                    //   Some(0)             : type verified empty -> hide unless selected
+                    //   None                : count fetch failed (timeout/error) -> show
+                    //                         (don't hide types just because their count
+                    //                         request failed)
+                    match self.resource_counts.get(t) {
+                        Some(&count) if count > 0 => {
+                            Some((format!("{} ({})", t, count), i))
+                        }
+                        Some(_) => {
+                            // Verified zero — only show if currently selected
+                            if self.selected_resource_types.contains(t) {
+                                Some((t.to_string(), i))
+                            } else {
+                                None
+                            }
+                        }
+                        None => {
+                            // Count unknown (fetch failed/timed out) — show the
+                            // type so the user can still select it
+                            Some((t.to_string(), i))
+                        }
                     }
                 })
                 .collect()
@@ -379,7 +393,7 @@ impl App {
                     fuzzy_match(&self.dropdown_query, item).map(|score| (i, score))
                 })
                 .collect();
-            scored.sort_by(|a, b| b.1.cmp(&a.1));
+            scored.sort_by_key(|s| Reverse(s.1));
             self.dropdown_filtered = scored.into_iter().map(|(i, _)| i).collect();
         }
 

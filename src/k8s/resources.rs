@@ -1,6 +1,5 @@
 use std::collections::BTreeMap;
 use std::fmt::Debug;
-use std::time::Duration;
 
 use anyhow::{Context as AnyhowContext, Result};
 use futures::{StreamExt, TryStreamExt};
@@ -25,6 +24,7 @@ use serde::Serialize;
 use tokio::sync::mpsc;
 
 use crate::event::AppEvent;
+use crate::k8s::K8S_TIMEOUT;
 use crate::types::{is_all_namespaces, ResourceItem, ResourceType};
 
 /// Build an `Api<T>` for a namespaced type, honoring the "all namespaces"
@@ -39,9 +39,6 @@ where
         Api::<T>::namespaced(client, namespace)
     }
 }
-
-/// Timeout for K8s API requests (list, get, describe).
-const K8S_REQUEST_TIMEOUT: Duration = Duration::from_secs(1);
 
 // ---------------------------------------------------------------------------
 // Generic watch / list / describe helpers
@@ -106,7 +103,7 @@ where
     T: Resource<DynamicType = ()> + Clone + DeserializeOwned + Debug + Send + Sync + 'static,
     F: Fn(&T) -> ResourceItem,
 {
-    let list = tokio::time::timeout(K8S_REQUEST_TIMEOUT, api.list(&ListParams::default()))
+    let list = tokio::time::timeout(K8S_TIMEOUT, api.list(&ListParams::default()))
         .await
         .context("request timed out (cluster may be unreachable)")?
         .context("API request failed")?;
@@ -117,7 +114,7 @@ async fn describe_generic<T>(api: Api<T>, name: &str) -> Result<String>
 where
     T: Resource<DynamicType = ()> + Clone + DeserializeOwned + Debug + Serialize + Send + Sync + 'static,
 {
-    let obj = tokio::time::timeout(K8S_REQUEST_TIMEOUT, api.get(name))
+    let obj = tokio::time::timeout(K8S_TIMEOUT, api.get(name))
         .await
         .context("request timed out (cluster may be unreachable)")?
         .context("API request failed")?;
@@ -475,7 +472,7 @@ async fn count_generic<T>(api: Api<T>) -> Result<usize>
 where
     T: Resource<DynamicType = ()> + Clone + DeserializeOwned + Debug + Send + Sync + 'static,
 {
-    let list = tokio::time::timeout(K8S_REQUEST_TIMEOUT, api.list(&ListParams::default()))
+    let list = tokio::time::timeout(K8S_TIMEOUT, api.list(&ListParams::default()))
         .await
         .context("request timed out (cluster may be unreachable)")?
         .context("API request failed")?;

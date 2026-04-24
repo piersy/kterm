@@ -1300,4 +1300,96 @@ mod tests {
         assert!(app.dropdown_filtered.is_empty());
         assert_eq!(app.dropdown_selected, 0);
     }
+
+    // --- visible_resource_types: count-based filtering ---
+
+    #[test]
+    fn test_visible_types_empty_counts_shows_all() {
+        let app = App::new();
+        assert!(app.resource_counts.is_empty());
+        let visible = app.visible_resource_types();
+        assert_eq!(visible.len(), ResourceType::ALL.len());
+    }
+
+    #[test]
+    fn test_visible_types_hides_verified_zero_count() {
+        let mut app = App::new();
+        app.selected_resource_types = vec![ResourceType::StatefulSets];
+        // Pods verified as 0, StatefulSets has 2
+        app.resource_counts.insert(ResourceType::Pods, 0);
+        app.resource_counts.insert(ResourceType::StatefulSets, 2);
+
+        let visible = app.visible_resource_types();
+        let visible_types: Vec<&str> = visible.iter().map(|(l, _)| l.as_str()).collect();
+
+        // Pods has count 0 and is NOT selected -> hidden
+        assert!(!visible_types.iter().any(|l| l.starts_with("pods")));
+        // StatefulSets has count > 0 -> visible with count
+        assert!(visible_types.iter().any(|l| l.starts_with("statefulsets")));
+    }
+
+    #[test]
+    fn test_visible_types_shows_zero_count_if_selected() {
+        let mut app = App::new();
+        app.selected_resource_types = vec![ResourceType::Pods];
+        app.resource_counts.insert(ResourceType::Pods, 0);
+        app.resource_counts.insert(ResourceType::StatefulSets, 2);
+
+        let visible = app.visible_resource_types();
+        let visible_types: Vec<&str> = visible.iter().map(|(l, _)| l.as_str()).collect();
+
+        // Pods has count 0 but IS selected -> visible
+        assert!(visible_types.iter().any(|l| l.starts_with("pods")));
+    }
+
+    #[test]
+    fn test_visible_types_shows_failed_count_types() {
+        // This is the core bug fix: types whose count fetch failed (not in
+        // the map at all) must still be visible so users can select them.
+        let mut app = App::new();
+        app.selected_resource_types = vec![ResourceType::StatefulSets];
+        // Only StatefulSets has a count. Pods is NOT in the map (count
+        // fetch failed/timed out), not because it has 0 resources.
+        app.resource_counts.insert(ResourceType::StatefulSets, 2);
+
+        let visible = app.visible_resource_types();
+        let visible_labels: Vec<&str> = visible.iter().map(|(l, _)| l.as_str()).collect();
+
+        // Pods is not in resource_counts (None) -> should still be visible
+        assert!(
+            visible_labels.iter().any(|l| l.starts_with("pods")),
+            "Pods should be visible when its count is unknown (not in map). Got: {:?}",
+            visible_labels,
+        );
+        // StatefulSets has count > 0 -> visible with count label
+        assert!(visible_labels.iter().any(|l| l.starts_with("statefulsets")));
+    }
+
+    #[test]
+    fn test_visible_types_after_type_switch_with_partial_counts() {
+        // Simulates the exact user scenario: start with pods, switch to
+        // statefulsets, then check that pods is still in the type selector.
+        let mut app = App::new();
+        // Simulate a count fetch where pods timed out but statefulsets succeeded
+        app.resource_counts.insert(ResourceType::StatefulSets, 2);
+        app.resource_counts.insert(ResourceType::Services, 3);
+        // Pods NOT in map (count fetch failed)
+
+        // User switched to statefulsets
+        app.selected_resource_types = vec![ResourceType::StatefulSets];
+
+        let visible = app.visible_resource_types();
+        let visible_labels: Vec<&str> = visible.iter().map(|(l, _)| l.as_str()).collect();
+
+        // Pods must still be visible (count unknown, not verified zero)
+        assert!(
+            visible_labels.iter().any(|l| l.starts_with("pods")),
+            "Pods should remain visible after type switch when count is unknown. Got: {:?}",
+            visible_labels,
+        );
+        // Services should be visible (count > 0)
+        assert!(visible_labels.iter().any(|l| l.starts_with("services")));
+        // StatefulSets should be visible (count > 0 and selected)
+        assert!(visible_labels.iter().any(|l| l.starts_with("statefulsets")));
+    }
 }
