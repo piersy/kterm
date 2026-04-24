@@ -99,15 +99,15 @@ impl EventHandler {
             let mut reader = EventStream::new();
             loop {
                 match reader.next().await {
-                    Some(Ok(crossterm::event::Event::Key(key))) => {
-                        if tx.send(AppEvent::Key(key)).is_err() {
-                            break;
-                        }
+                    Some(Ok(crossterm::event::Event::Key(key)))
+                        if tx.send(AppEvent::Key(key)).is_err() =>
+                    {
+                        break;
                     }
-                    Some(Ok(crossterm::event::Event::Resize(w, h))) => {
-                        if tx.send(AppEvent::Resize(w, h)).is_err() {
-                            break;
-                        }
+                    Some(Ok(crossterm::event::Event::Resize(w, h)))
+                        if tx.send(AppEvent::Resize(w, h)).is_err() =>
+                    {
+                        break;
                     }
                     Some(Err(_)) => break,
                     _ => {}

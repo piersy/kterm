@@ -118,11 +118,7 @@ pub fn render_error_popup(frame: &mut Frame, app: &App) {
         // Compute height: 2 lines border + message lines (wrap at ~60% width)
         let popup_width = (area.width as f32 * 0.6).max(30.0).min(area.width as f32) as u16;
         let inner_width = popup_width.saturating_sub(4) as usize;
-        let wrapped_lines = if inner_width > 0 {
-            (msg.len() / inner_width) + 1
-        } else {
-            1
-        };
+        let wrapped_lines = msg.len().checked_div(inner_width).map(|d| d + 1).unwrap_or(1);
         let popup_height = (wrapped_lines as u16 + 4).min(area.height);
 
         let popup_area = centered_rect_fixed(popup_width, popup_height, area);

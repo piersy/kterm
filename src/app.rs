@@ -1,3 +1,4 @@
+use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -281,7 +282,7 @@ impl App {
                     fuzzy_match(&self.search_query, &r.resource.name).map(|score| (i, score))
                 })
                 .collect();
-            scored.sort_by(|a, b| b.1.cmp(&a.1));
+            scored.sort_by_key(|s| Reverse(s.1));
             self.search_filtered = scored.into_iter().map(|(i, _)| i).collect();
         }
         if self.search_filtered.is_empty() {
@@ -392,7 +393,7 @@ impl App {
                     fuzzy_match(&self.dropdown_query, item).map(|score| (i, score))
                 })
                 .collect();
-            scored.sort_by(|a, b| b.1.cmp(&a.1));
+            scored.sort_by_key(|s| Reverse(s.1));
             self.dropdown_filtered = scored.into_iter().map(|(i, _)| i).collect();
         }
 
