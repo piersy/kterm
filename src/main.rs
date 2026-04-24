@@ -1245,7 +1245,9 @@ fn exec_into_pod(context: &str, namespace: &str, pod: &str) -> Result<()> {
         libc::signal(libc::SIGINT, libc::SIG_IGN);
     }
 
-    // Try bash, fall back to sh — same trick used by kubectl's docs/k9s.
+    // Prefer fish, then bash, then sh. Each candidate is probed with
+    // `command -v` before `exec` because POSIX `exec` exits the shell on
+    // failure, so `exec fish || exec bash` wouldn't fall back on dash/ash.
     let status = std::process::Command::new("kubectl")
         .arg("exec")
         .arg("-it")
@@ -1257,7 +1259,12 @@ fn exec_into_pod(context: &str, namespace: &str, pod: &str) -> Result<()> {
         .arg("--")
         .arg("sh")
         .arg("-c")
-        .arg("command -v bash >/dev/null 2>&1 && exec bash || exec sh")
+        .arg(
+            "if   command -v fish >/dev/null 2>&1; then exec fish; \
+             elif command -v bash >/dev/null 2>&1; then exec bash; \
+             else exec sh; \
+             fi",
+        )
         .status();
 
     unsafe {
