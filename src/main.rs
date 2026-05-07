@@ -13,7 +13,7 @@ mod subprocess_test;
 
 use std::io;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use crossterm::event::KeyEventKind;
 use crossterm::execute;
 use crossterm::terminal::{
@@ -684,29 +684,43 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                                 } else {
                                     resource.namespace.clone()
                                 };
-                                let context = app.current_context().to_string();
 
-                                events.suspend();
-                                disable_raw_mode()?;
-                                // Stay in the alternate screen and wipe it so
-                                // the pod's shell prompt lands at the top of
-                                // a blank window, instead of falling through
-                                // to whatever was in the user's terminal
-                                // before kterm started.
-                                execute!(
-                                    terminal.backend_mut(),
-                                    Clear(ClearType::All),
-                                    crossterm::cursor::MoveTo(0, 0),
-                                )?;
+                                let client = {
+                                    let guard = k8s_manager.lock().await;
+                                    guard.as_ref().map(|m| m.client.clone())
+                                };
 
-                                let exec_result = exec_into_pod(&context, &ns, &name);
+                                if let Some(client) = client {
+                                    events.suspend();
+                                    // Stay in raw mode so keystrokes flow as
+                                    // bytes into the websocket pump. Clear
+                                    // the alternate screen and show the
+                                    // cursor so the shell prompt lands at
+                                    // the top of a blank window.
+                                    execute!(
+                                        terminal.backend_mut(),
+                                        Clear(ClearType::All),
+                                        crossterm::cursor::MoveTo(0, 0),
+                                        crossterm::cursor::Show,
+                                    )?;
 
-                                enable_raw_mode()?;
-                                terminal.clear()?;
-                                events.resume();
+                                    let exec_result =
+                                        exec_into_pod(client, &ns, &name).await;
 
-                                if let Err(e) = exec_result {
-                                    app.set_error(format!("Exec error: {}", e));
+                                    execute!(
+                                        terminal.backend_mut(),
+                                        crossterm::cursor::Hide,
+                                    )?;
+                                    terminal.clear()?;
+                                    events.resume();
+
+                                    if let Err(e) = exec_result {
+                                        app.set_error(format!("Exec error: {}", e));
+                                    }
+                                } else {
+                                    app.set_error(
+                                        "No Kubernetes client available".to_string(),
+                                    );
                                 }
                             }
                         }
@@ -1237,57 +1251,135 @@ fn strip_managed_fields(yaml: &str) -> String {
     }
 }
 
-/// Spawn an interactive shell inside a pod via `kubectl exec -it`.
+/// Open an interactive shell session inside a pod over kube-rs's existing
+/// authenticated websocket connection.
 ///
-/// kubectl handles PTY allocation, raw-mode, SIGWINCH forwarding, and writing
-/// stdin/stdout over the websocket — implementing that directly against
-/// kube-rs would be substantially more code. The caller is responsible for
-/// leaving the alternate screen and disabling crossterm's raw mode before
-/// calling this.
-fn exec_into_pod(context: &str, namespace: &str, pod: &str) -> Result<()> {
-    // SIGINT is ignored so ^C in the remote shell (during the brief window
-    // when the terminal isn't yet in kubectl's raw mode, or after kubectl
-    // restores it) doesn't also kill kterm. Same pattern as
-    // `open_logs_in_less`.
-    unsafe {
-        libc::signal(libc::SIGINT, libc::SIG_IGN);
-    }
+/// Faster than shelling out to `kubectl` because it skips re-parsing
+/// kubeconfig, re-running auth-exec plugins (gke-gcloud-auth-plugin,
+/// aws-iam-authenticator, ...), and a fresh TLS handshake. The terminal
+/// must already be in raw mode and in the alternate screen; the caller
+/// is responsible for clearing it before this is invoked.
+async fn exec_into_pod(
+    client: kube::Client,
+    namespace: &str,
+    pod: &str,
+) -> Result<()> {
+    use futures::SinkExt;
+    use k8s_openapi::api::core::v1::Pod;
+    use kube::api::{AttachParams, TerminalSize};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-    // Prefer fish, then bash, then sh. Each candidate is probed with
-    // `command -v` before `exec` because POSIX `exec` exits the shell on
-    // failure, so `exec fish || exec bash` wouldn't fall back on dash/ash.
-    let status = std::process::Command::new("kubectl")
-        .arg("exec")
-        .arg("-it")
-        .arg("--context")
-        .arg(context)
-        .arg("-n")
-        .arg(namespace)
-        .arg(pod)
-        .arg("--")
-        .arg("sh")
-        .arg("-c")
-        .arg(
-            "if   command -v fish >/dev/null 2>&1; then exec fish; \
-             elif command -v bash >/dev/null 2>&1; then exec bash; \
-             else exec sh; \
-             fi",
+    // Forward the local TERM into the container so colors / readline /
+    // termcap-driven apps (vim, htop, less) behave the same as if the
+    // user had ssh'd in.
+    let term = std::env::var("TERM").unwrap_or_else(|_| "xterm-256color".to_string());
+    let script = format!(
+        "TERM={term}; export TERM; \
+         if   command -v fish >/dev/null 2>&1; then exec fish; \
+         elif command -v bash >/dev/null 2>&1; then exec bash; \
+         else exec sh; \
+         fi"
+    );
+
+    let api: kube::Api<Pod> = kube::Api::namespaced(client, namespace);
+    let mut attached = api
+        .exec(
+            pod,
+            vec!["sh".to_string(), "-c".to_string(), script],
+            &AttachParams::interactive_tty(),
         )
-        .status();
+        .await
+        .context("Failed to start exec session")?;
 
-    unsafe {
-        libc::signal(libc::SIGINT, libc::SIG_DFL);
-    }
+    let mut stdin_pipe = attached
+        .stdin()
+        .ok_or_else(|| anyhow::anyhow!("exec session has no stdin"))?;
+    let mut stdout_pipe = attached
+        .stdout()
+        .ok_or_else(|| anyhow::anyhow!("exec session has no stdout"))?;
+    let resize_sender = attached.terminal_size();
 
-    match status {
-        Ok(_) => Ok(()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            anyhow::bail!(
-                "`kubectl` not found on PATH — install it to use exec"
-            )
+    // Pump local stdin → websocket. Local terminal is already in raw mode
+    // so each keystroke arrives as its raw byte sequence.
+    let stdin_task = tokio::spawn(async move {
+        let mut buf = [0u8; 4096];
+        let mut tokio_stdin = tokio::io::stdin();
+        loop {
+            match tokio_stdin.read(&mut buf).await {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    if stdin_pipe.write_all(&buf[..n]).await.is_err() {
+                        break;
+                    }
+                    let _ = stdin_pipe.flush().await;
+                }
+            }
         }
-        Err(e) => Err(e.into()),
+    });
+
+    // Pump websocket → local stdout.
+    let stdout_task = tokio::spawn(async move {
+        let mut buf = [0u8; 4096];
+        let mut tokio_stdout = tokio::io::stdout();
+        loop {
+            match stdout_pipe.read(&mut buf).await {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    if tokio_stdout.write_all(&buf[..n]).await.is_err() {
+                        break;
+                    }
+                    let _ = tokio_stdout.flush().await;
+                }
+            }
+        }
+    });
+
+    // Send the initial terminal size and forward future SIGWINCH events
+    // so the remote PTY tracks the local window dimensions.
+    let resize_task = if let Some(mut sender) = resize_sender {
+        if let Ok((cols, rows)) = crossterm::terminal::size() {
+            let _ = sender
+                .send(TerminalSize {
+                    width: cols,
+                    height: rows,
+                })
+                .await;
+        }
+        Some(tokio::spawn(async move {
+            use tokio::signal::unix::{signal, SignalKind};
+            let mut winch = match signal(SignalKind::window_change()) {
+                Ok(s) => s,
+                Err(_) => return,
+            };
+            while winch.recv().await.is_some() {
+                if let Ok((cols, rows)) = crossterm::terminal::size() {
+                    if sender
+                        .send(TerminalSize {
+                            width: cols,
+                            height: rows,
+                        })
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+            }
+        }))
+    } else {
+        None
+    };
+
+    // Wait for the remote shell to exit (websocket closed by either side).
+    let _ = attached.join().await;
+
+    stdin_task.abort();
+    stdout_task.abort();
+    if let Some(t) = resize_task {
+        t.abort();
     }
+
+    Ok(())
 }
 
 fn edit_yaml_in_editor(yaml: &str) -> Result<Option<String>> {
