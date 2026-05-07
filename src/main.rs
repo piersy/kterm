@@ -1267,9 +1267,9 @@ async fn exec_into_pod(
     use futures::SinkExt;
     use k8s_openapi::api::core::v1::Pod;
     use kube::api::{AttachParams, TerminalSize};
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::Arc;
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use std::os::unix::io::{AsRawFd, FromRawFd, OwnedFd};
+    use tokio::io::unix::AsyncFd;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt, Interest};
 
     // Forward the local TERM into the container so colors / readline /
     // termcap-driven apps (vim, htop, less) behave the same as if the
@@ -1301,55 +1301,85 @@ async fn exec_into_pod(
         .ok_or_else(|| anyhow::anyhow!("exec session has no stdout"))?;
     let resize_sender = attached.terminal_size();
 
-    // Stdin reader runs on a dedicated OS thread that polls stdin with a
-    // short timeout so it can promptly stop on request.
-    // `tokio::io::stdin()` won't work here: its internal blocking thread
-    // can't be canceled mid-read, so after the shell exits the next
-    // keypress would be eaten by the lingering reader before kterm's
-    // event loop sees it.
-    let stop_stdin = Arc::new(AtomicBool::new(false));
-    let (byte_tx, mut byte_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(64);
-    let stop_for_thread = stop_stdin.clone();
-    let stdin_thread = std::thread::spawn(move || {
-        let fd = libc::STDIN_FILENO;
-        let mut buf = [0u8; 4096];
-        loop {
-            if stop_for_thread.load(Ordering::Relaxed) {
-                return;
-            }
-            let mut pollfd = libc::pollfd {
-                fd,
-                events: libc::POLLIN,
-                revents: 0,
-            };
-            // Poll wakes every 100ms so we can re-check the stop flag.
-            let r = unsafe { libc::poll(&mut pollfd, 1, 100) };
-            if stop_for_thread.load(Ordering::Relaxed) {
-                return;
-            }
-            if r <= 0 || pollfd.revents & libc::POLLIN == 0 {
-                continue;
-            }
-            let n = unsafe {
-                libc::read(fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len())
-            };
-            if n <= 0 {
-                return;
-            }
-            let bytes = buf[..n as usize].to_vec();
-            if byte_tx.blocking_send(bytes).is_err() {
-                return;
+    // Switch stdin to non-blocking for the session so AsyncFd can drive
+    // it without parking a worker thread. O_NONBLOCK lives on the open
+    // file description (shared with FD 0), so we save it and restore via
+    // a Drop guard. Without this, kterm's editor / less subprocesses
+    // would inherit a non-blocking stdin.
+    let original_flags = unsafe { libc::fcntl(libc::STDIN_FILENO, libc::F_GETFL) };
+    if original_flags < 0 {
+        anyhow::bail!(
+            "fcntl(stdin, F_GETFL) failed: {}",
+            std::io::Error::last_os_error()
+        );
+    }
+    struct StdinFlagsGuard {
+        original: libc::c_int,
+    }
+    impl Drop for StdinFlagsGuard {
+        fn drop(&mut self) {
+            unsafe {
+                libc::fcntl(libc::STDIN_FILENO, libc::F_SETFL, self.original);
             }
         }
-    });
+    }
+    unsafe {
+        libc::fcntl(
+            libc::STDIN_FILENO,
+            libc::F_SETFL,
+            original_flags | libc::O_NONBLOCK,
+        );
+    }
+    let _flags_guard = StdinFlagsGuard {
+        original: original_flags,
+    };
 
-    // Async pump: forward bytes from the OS thread to the websocket.
-    let stdin_pump = tokio::spawn(async move {
-        while let Some(bytes) = byte_rx.recv().await {
-            if stdin_pipe.write_all(&bytes).await.is_err() {
-                break;
+    // dup stdin into an OwnedFd so AsyncFd manages its lifetime; FD 0
+    // itself stays open for kterm to read from once exec returns.
+    let stdin_fd = unsafe {
+        let dup = libc::dup(libc::STDIN_FILENO);
+        if dup < 0 {
+            anyhow::bail!("dup(stdin) failed: {}", std::io::Error::last_os_error());
+        }
+        OwnedFd::from_raw_fd(dup)
+    };
+    let stdin_async = AsyncFd::with_interest(stdin_fd, Interest::READABLE)
+        .context("Failed to register stdin with tokio reactor")?;
+
+    // Pump local stdin → websocket. AsyncFd's readable() future is
+    // cancel-safe: aborting the task drops it cleanly, no syscall is in
+    // progress, and no byte is consumed in the process.
+    let stdin_task = tokio::spawn(async move {
+        let mut buf = [0u8; 4096];
+        loop {
+            let mut guard = match stdin_async.readable().await {
+                Ok(g) => g,
+                Err(_) => break,
+            };
+            let result = guard.try_io(|inner| {
+                let n = unsafe {
+                    libc::read(
+                        inner.as_raw_fd(),
+                        buf.as_mut_ptr() as *mut libc::c_void,
+                        buf.len(),
+                    )
+                };
+                if n < 0 {
+                    Err(std::io::Error::last_os_error())
+                } else {
+                    Ok(n as usize)
+                }
+            });
+            match result {
+                Ok(Ok(0)) | Ok(Err(_)) => break,
+                Ok(Ok(n)) => {
+                    if stdin_pipe.write_all(&buf[..n]).await.is_err() {
+                        break;
+                    }
+                    let _ = stdin_pipe.flush().await;
+                }
+                Err(_would_block) => continue,
             }
-            let _ = stdin_pipe.flush().await;
         }
     });
 
@@ -1409,17 +1439,12 @@ async fn exec_into_pod(
     // Wait for the remote shell to exit (websocket closed by either side).
     let _ = attached.join().await;
 
-    // Stop the stdin reader BEFORE returning so the user's next keypress
-    // is left in the kernel buffer for crossterm to pick up. Joining
-    // happens off the runtime so we don't block a tokio worker.
-    stop_stdin.store(true, Ordering::Relaxed);
+    stdin_task.abort();
     stdout_task.abort();
     if let Some(t) = resize_task {
         t.abort();
     }
-    let _ = tokio::task::spawn_blocking(move || stdin_thread.join()).await;
-    stdin_pump.abort();
-
+    // _flags_guard drops here, restoring stdin's original flags.
     Ok(())
 }
 
