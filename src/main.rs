@@ -1267,6 +1267,8 @@ async fn exec_into_pod(
     use futures::SinkExt;
     use k8s_openapi::api::core::v1::Pod;
     use kube::api::{AttachParams, TerminalSize};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     // Forward the local TERM into the container so colors / readline /
@@ -1299,21 +1301,55 @@ async fn exec_into_pod(
         .ok_or_else(|| anyhow::anyhow!("exec session has no stdout"))?;
     let resize_sender = attached.terminal_size();
 
-    // Pump local stdin → websocket. Local terminal is already in raw mode
-    // so each keystroke arrives as its raw byte sequence.
-    let stdin_task = tokio::spawn(async move {
+    // Stdin reader runs on a dedicated OS thread that polls stdin with a
+    // short timeout so it can promptly stop on request.
+    // `tokio::io::stdin()` won't work here: its internal blocking thread
+    // can't be canceled mid-read, so after the shell exits the next
+    // keypress would be eaten by the lingering reader before kterm's
+    // event loop sees it.
+    let stop_stdin = Arc::new(AtomicBool::new(false));
+    let (byte_tx, mut byte_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(64);
+    let stop_for_thread = stop_stdin.clone();
+    let stdin_thread = std::thread::spawn(move || {
+        let fd = libc::STDIN_FILENO;
         let mut buf = [0u8; 4096];
-        let mut tokio_stdin = tokio::io::stdin();
         loop {
-            match tokio_stdin.read(&mut buf).await {
-                Ok(0) | Err(_) => break,
-                Ok(n) => {
-                    if stdin_pipe.write_all(&buf[..n]).await.is_err() {
-                        break;
-                    }
-                    let _ = stdin_pipe.flush().await;
-                }
+            if stop_for_thread.load(Ordering::Relaxed) {
+                return;
             }
+            let mut pollfd = libc::pollfd {
+                fd,
+                events: libc::POLLIN,
+                revents: 0,
+            };
+            // Poll wakes every 100ms so we can re-check the stop flag.
+            let r = unsafe { libc::poll(&mut pollfd, 1, 100) };
+            if stop_for_thread.load(Ordering::Relaxed) {
+                return;
+            }
+            if r <= 0 || pollfd.revents & libc::POLLIN == 0 {
+                continue;
+            }
+            let n = unsafe {
+                libc::read(fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len())
+            };
+            if n <= 0 {
+                return;
+            }
+            let bytes = buf[..n as usize].to_vec();
+            if byte_tx.blocking_send(bytes).is_err() {
+                return;
+            }
+        }
+    });
+
+    // Async pump: forward bytes from the OS thread to the websocket.
+    let stdin_pump = tokio::spawn(async move {
+        while let Some(bytes) = byte_rx.recv().await {
+            if stdin_pipe.write_all(&bytes).await.is_err() {
+                break;
+            }
+            let _ = stdin_pipe.flush().await;
         }
     });
 
@@ -1373,11 +1409,16 @@ async fn exec_into_pod(
     // Wait for the remote shell to exit (websocket closed by either side).
     let _ = attached.join().await;
 
-    stdin_task.abort();
+    // Stop the stdin reader BEFORE returning so the user's next keypress
+    // is left in the kernel buffer for crossterm to pick up. Joining
+    // happens off the runtime so we don't block a tokio worker.
+    stop_stdin.store(true, Ordering::Relaxed);
     stdout_task.abort();
     if let Some(t) = resize_task {
         t.abort();
     }
+    let _ = tokio::task::spawn_blocking(move || stdin_thread.join()).await;
+    stdin_pump.abort();
 
     Ok(())
 }
