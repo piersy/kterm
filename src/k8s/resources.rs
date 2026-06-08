@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::fmt::Debug;
 
 use anyhow::{Context as AnyhowContext, Result};
-use futures::{StreamExt, TryStreamExt};
+use futures::StreamExt;
 use k8s_openapi::api::apps::v1::{DaemonSet, Deployment, ReplicaSet, StatefulSet};
 use k8s_openapi::api::autoscaling::v1::HorizontalPodAutoscaler;
 use k8s_openapi::api::batch::v1::{CronJob, Job};
@@ -61,7 +61,25 @@ where
 
     let mut cache: BTreeMap<String, T> = BTreeMap::new();
 
-    while let Some(event) = stream.try_next().await? {
+    while let Some(result) = stream.next().await {
+        let event = match result {
+            Ok(event) => event,
+            // The kube `watcher()` is an infinite, self-healing stream: when
+            // the API server recycles a watch connection (which it does
+            // routinely, e.g. "error reading a body from connection") it
+            // yields a *recoverable* error and then re-lists/re-watches on
+            // its own (with the backoff configured above). Treat these as
+            // transient — log and keep consuming the stream rather than
+            // bailing out, which would falsely mark the cluster unreachable
+            // and stop live updates.
+            Err(e) => {
+                crate::logging::log_error(&format!(
+                    "Watcher for {}: transient error (recovering): {}",
+                    rt, e
+                ));
+                continue;
+            }
+        };
         match event {
             watcher::Event::Apply(obj) | watcher::Event::InitApply(obj) => {
                 let name = ResourceExt::name_any(&obj);
