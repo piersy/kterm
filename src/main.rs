@@ -692,13 +692,18 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
 
                                 if let Some(client) = client {
                                     events.suspend();
-                                    // Stay in raw mode so keystrokes flow as
-                                    // bytes into the websocket pump. Clear
-                                    // the alternate screen and show the
-                                    // cursor so the shell prompt lands at
-                                    // the top of a blank window.
+                                    // Leave the alternate screen and clear
+                                    // the visible area before launching the
+                                    // session so the shell renders into the
+                                    // terminal's main screen — that gives
+                                    // the user real scrollback during exec.
+                                    // The clear hides the user's pre-kterm
+                                    // shell content; it stays in scrollback
+                                    // above row 0, accessible by scrolling
+                                    // up.
                                     execute!(
                                         terminal.backend_mut(),
+                                        LeaveAlternateScreen,
                                         Clear(ClearType::All),
                                         crossterm::cursor::MoveTo(0, 0),
                                         crossterm::cursor::Show,
@@ -710,6 +715,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                                     execute!(
                                         terminal.backend_mut(),
                                         crossterm::cursor::Hide,
+                                        EnterAlternateScreen,
                                     )?;
                                     terminal.clear()?;
                                     events.resume();
