@@ -155,7 +155,7 @@ fn render_multi_type(frame: &mut Frame, app: &mut App, area: Rect, display_rows:
                     cells.push(
                         Cell::from(item.status.clone()).style(status_style(&item.status)),
                     );
-                    cells.push(Cell::from(item.age.clone()));
+                    cells.push(Cell::from(item.age()));
                     Row::new(cells).height(1)
                 } else {
                     Row::new(vec![Cell::from("?")]).height(1)
