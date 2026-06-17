@@ -18,6 +18,9 @@ fn resource_list_bindings(app: &App) -> String {
         parts.push("r:Restart");
     }
     parts.push("e:Edit");
+    if rt.map(|t| t.supports_exec()).unwrap_or(app.primary_resource_type().supports_exec()) {
+        parts.push("x:Exec");
+    }
     parts.push("/:Filter");
     parts.push("Ctrl+F:Search");
     parts.join("  ")
@@ -32,6 +35,9 @@ fn detail_bindings(app: &App) -> String {
     parts.push("d:Delete");
     if rt.map(|t| t.supports_restart()).unwrap_or(false) {
         parts.push("r:Restart");
+    }
+    if rt.map(|t| t.supports_exec()).unwrap_or(false) {
+        parts.push("x:Exec");
     }
     parts.push("g/G:Top/Bottom");
     parts.join("  ")

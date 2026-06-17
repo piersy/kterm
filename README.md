@@ -39,7 +39,7 @@ Fuzzy search (`Ctrl+F`) searches across all clusters, namespaces, and resource t
 - **Real-time updates** -- watches resources via the Kubernetes API; changes appear automatically
 - **Detail view** -- formatted description with conditions, containers, events, and full YAML
 - **Log streaming** -- tail pod logs with follow mode, scroll through history
-- **Actions** -- delete, restart (rollout restart for StatefulSets), edit YAML in `$EDITOR`
+- **Actions** -- delete, restart (rollout restart for StatefulSets), edit YAML in `$EDITOR`, exec into a pod (no `kubectl` required -- runs over the existing kube client)
 - **Fuzzy search** -- `Ctrl+F` to search across all clusters, namespaces, and resource types at once; results show name, type, namespace, and cluster side by side
 - **Filtering** -- search resources by name with `/`
 - **Color-coded status** -- green for Running/Bound, yellow for Pending, red for Failed/CrashLoopBackOff
@@ -122,6 +122,7 @@ The app reads your kubeconfig and connects to the current context. If no cluster
 | `d` | Delete (with confirmation) |
 | `r` | Restart (with confirmation) |
 | `e` | Edit YAML in `$EDITOR` |
+| `x` | Exec into pod (interactive shell over the kube client) |
 | `/` | Filter by name |
 | `Ctrl+f` | Fuzzy search all clusters |
 
@@ -147,6 +148,7 @@ The app reads your kubeconfig and connects to the current context. If no cluster
 | `d` | Delete |
 | `r` | Restart |
 | `e` | Edit |
+| `x` | Exec into pod |
 
 ### Logs view
 

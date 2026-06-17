@@ -596,6 +596,43 @@ mod tests {
     }
 
     #[test]
+    fn test_exec_action_from_list() {
+        let mut app = app_with_pods();
+        let action = app.handle_input(key(KeyCode::Char('x')));
+        assert_eq!(action, InputAction::Exec);
+    }
+
+    #[test]
+    fn test_exec_action_from_detail_view() {
+        let mut app = app_with_pods();
+        app.view_mode = ViewMode::Detail;
+        let action = app.handle_input(key(KeyCode::Char('x')));
+        assert_eq!(action, InputAction::Exec);
+    }
+
+    /// Non-pod resources do not support exec, so `x` must be a no-op.
+    #[test]
+    fn test_exec_action_rejected_for_non_pod() {
+        let mut app = App::new();
+        app.focus = Focus::ResourceList;
+        app.selected_resource_types = vec![ResourceType::Services];
+        app.resources_by_type.insert(
+            ResourceType::Services,
+            vec![ResourceItem {
+                name: "svc-0".to_string(),
+                namespace: "default".to_string(),
+                status: String::new(),
+                age: "1h".to_string(),
+                extra: vec![],
+                raw_yaml: String::new(),
+            }],
+        );
+        app.select_first_row();
+        let action = app.handle_input(key(KeyCode::Char('x')));
+        assert_eq!(action, InputAction::None);
+    }
+
+    #[test]
     fn test_filter_mode() {
         let mut app = app_with_pods();
 

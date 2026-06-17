@@ -693,6 +693,14 @@ impl App {
                     InputAction::None
                 }
             }
+            KeyCode::Char('x') => {
+                if let Some((_, rt)) = self.selected_resource() {
+                    if rt.supports_exec() {
+                        return InputAction::Exec;
+                    }
+                }
+                InputAction::None
+            }
             KeyCode::Char('/') => {
                 self.filter_active = true;
                 // Keep existing filter text so user can continue editing
@@ -824,6 +832,15 @@ impl App {
             KeyCode::Char('e') => {
                 if self.selected_resource().is_some() {
                     InputAction::Edit
+                } else {
+                    InputAction::None
+                }
+            }
+            KeyCode::Char('x') => {
+                if rt.map(|t| t.supports_exec()).unwrap_or(false)
+                    && self.selected_resource().is_some()
+                {
+                    InputAction::Exec
                 } else {
                     InputAction::None
                 }
@@ -1087,6 +1104,7 @@ pub enum InputAction {
     Delete,
     Restart,
     Edit,
+    Exec,
     OpenLogsInEditor,
     OpenLogsInLess,
     StartSearch,
