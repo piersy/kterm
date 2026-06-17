@@ -4,8 +4,8 @@ mod tests {
 
     use crate::app::{App, InputAction};
     use crate::types::{
-        is_all_namespaces, ColumnDef, ConfirmAction, Focus, ResourceItem, ResourceType,
-        SelectorTarget, ViewMode, ALL_NAMESPACES_LABEL,
+        format_age_secs, is_all_namespaces, ColumnDef, ConfirmAction, Focus, ResourceItem,
+        ResourceType, SelectorTarget, ViewMode, ALL_NAMESPACES_LABEL,
     };
 
     fn key(code: KeyCode) -> KeyEvent {
@@ -31,7 +31,7 @@ mod tests {
             name: name.to_string(),
             namespace: "default".to_string(),
             status: status.to_string(),
-            age: "1h".to_string(),
+            created_at: None,
             extra: vec![
                 ("restarts".to_string(), "0".to_string()),
                 ("node".to_string(), "node-a".to_string()),
@@ -499,7 +499,7 @@ mod tests {
                 name: "my-pvc".to_string(),
                 namespace: "default".to_string(),
                 status: "Bound".to_string(),
-                age: "1d".to_string(),
+                created_at: None,
                 extra: vec![],
                 raw_yaml: String::new(),
             }],
@@ -622,7 +622,7 @@ mod tests {
                 name: "svc-0".to_string(),
                 namespace: "default".to_string(),
                 status: String::new(),
-                age: "1h".to_string(),
+                created_at: None,
                 extra: vec![],
                 raw_yaml: String::new(),
             }],
@@ -692,7 +692,7 @@ mod tests {
         let cols = item.column_values(&defs);
         assert_eq!(cols[0], "my-pod");
         assert_eq!(cols[1], "Running");
-        assert_eq!(cols[2], "1h");
+        assert_eq!(cols[2], "<unknown>");
         assert_eq!(cols[3], "0");
         assert_eq!(cols[4], "node-a");
     }
@@ -703,7 +703,7 @@ mod tests {
             name: "my-pvc".to_string(),
             namespace: "default".to_string(),
             status: "Bound".to_string(),
-            age: "2d".to_string(),
+            created_at: None,
             extra: vec![
                 ("volume".to_string(), "pv-001".to_string()),
                 ("capacity".to_string(), "10Gi".to_string()),
@@ -716,7 +716,7 @@ mod tests {
         assert_eq!(cols[1], "Bound");
         assert_eq!(cols[2], "pv-001");
         assert_eq!(cols[3], "10Gi");
-        assert_eq!(cols[4], "2d");
+        assert_eq!(cols[4], "<unknown>");
     }
 
     #[test]
@@ -725,7 +725,7 @@ mod tests {
             name: "my-ss".to_string(),
             namespace: "default".to_string(),
             status: "Active".to_string(),
-            age: "5d".to_string(),
+            created_at: None,
             extra: vec![("ready".to_string(), "3/3".to_string())],
             raw_yaml: String::new(),
         };
@@ -733,7 +733,32 @@ mod tests {
         let cols = item.column_values(&defs);
         assert_eq!(cols[0], "my-ss");
         assert_eq!(cols[1], "3/3");
-        assert_eq!(cols[2], "5d");
+        assert_eq!(cols[2], "<unknown>");
+    }
+
+    #[test]
+    fn test_age_is_computed_live_from_created_at() {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+
+        // A pod created two days ago renders a day/hour age, computed
+        // relative to "now" rather than frozen at fetch time.
+        let item = ResourceItem {
+            name: "my-pod".to_string(),
+            namespace: "default".to_string(),
+            status: "Running".to_string(),
+            created_at: Some(now - 2 * 86400),
+            extra: vec![],
+            raw_yaml: String::new(),
+        };
+        assert_eq!(item.age(), "2d0h");
+
+        // Recent and missing-timestamp cases.
+        assert_eq!(format_age_secs(Some(now - 45)), "45s");
+        assert_eq!(format_age_secs(Some(now - 5 * 60)), "5m");
+        assert_eq!(format_age_secs(None), "<unknown>");
     }
 
     #[test]
@@ -827,7 +852,7 @@ mod tests {
                 name: name.to_string(),
                 namespace: ns.to_string(),
                 status: "Running".to_string(),
-                age: "1h".to_string(),
+                created_at: None,
                 extra: vec![
                     ("restarts".to_string(), "0".to_string()),
                     ("node".to_string(), "node-a".to_string()),
@@ -1160,7 +1185,7 @@ mod tests {
                 name: "svc-0".to_string(),
                 namespace: "default".to_string(),
                 status: "Active".to_string(),
-                age: "1d".to_string(),
+                created_at: None,
                 extra: vec![],
                 raw_yaml: String::new(),
             }],
@@ -1189,7 +1214,7 @@ mod tests {
                 name: "svc-0".to_string(),
                 namespace: "default".to_string(),
                 status: "Active".to_string(),
-                age: "1d".to_string(),
+                created_at: None,
                 extra: vec![],
                 raw_yaml: String::new(),
             }],

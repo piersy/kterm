@@ -21,7 +21,7 @@ mod tests {
             name: name.to_string(),
             namespace: "default".to_string(),
             status: "Running".to_string(),
-            age: "1h".to_string(),
+            created_at: None,
             extra: vec![
                 ("restarts".to_string(), "0".to_string()),
                 ("node".to_string(), "node-a".to_string()),

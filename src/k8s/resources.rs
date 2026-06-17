@@ -890,14 +890,14 @@ fn pod_to_resource_item(pod: &Pod) -> ResourceItem {
         ("Unknown".to_string(), "0".to_string(), "<none>".to_string())
     };
 
-    let age = format_age(pod.metadata.creation_timestamp.as_ref());
+    let created_at = creation_secs(pod.metadata.creation_timestamp.as_ref());
     let raw_yaml = serde_yaml::to_string(pod).unwrap_or_default();
 
     ResourceItem {
         name,
         namespace,
         status,
-        age,
+        created_at,
         extra: vec![
             ("restarts".to_string(), restarts),
             ("node".to_string(), node),
@@ -935,14 +935,14 @@ fn deployment_to_resource_item(deploy: &Deployment) -> ResourceItem {
         )
     };
 
-    let age = format_age(deploy.metadata.creation_timestamp.as_ref());
+    let created_at = creation_secs(deploy.metadata.creation_timestamp.as_ref());
     let raw_yaml = serde_yaml::to_string(deploy).unwrap_or_default();
 
     ResourceItem {
         name,
         namespace,
         status,
-        age,
+        created_at,
         extra: vec![
             ("ready".to_string(), ready),
             ("up-to-date".to_string(), up_to_date),
@@ -974,14 +974,14 @@ fn statefulset_to_resource_item(ss: &StatefulSet) -> ResourceItem {
         ("Unknown".to_string(), "0/0".to_string())
     };
 
-    let age = format_age(ss.metadata.creation_timestamp.as_ref());
+    let created_at = creation_secs(ss.metadata.creation_timestamp.as_ref());
     let raw_yaml = serde_yaml::to_string(ss).unwrap_or_default();
 
     ResourceItem {
         name,
         namespace,
         status,
-        age,
+        created_at,
         extra: vec![("ready".to_string(), ready)],
         raw_yaml,
     }
@@ -1001,14 +1001,14 @@ fn daemonset_to_resource_item(ds: &DaemonSet) -> ResourceItem {
         ("0".to_string(), "0".to_string(), "0".to_string())
     };
 
-    let age = format_age(ds.metadata.creation_timestamp.as_ref());
+    let created_at = creation_secs(ds.metadata.creation_timestamp.as_ref());
     let raw_yaml = serde_yaml::to_string(ds).unwrap_or_default();
 
     ResourceItem {
         name,
         namespace,
         status: String::new(),
-        age,
+        created_at,
         extra: vec![
             ("desired".to_string(), desired),
             ("current".to_string(), current),
@@ -1037,14 +1037,14 @@ fn replicaset_to_resource_item(rs: &ReplicaSet) -> ResourceItem {
         ("0".to_string(), "0".to_string(), "0".to_string())
     };
 
-    let age = format_age(rs.metadata.creation_timestamp.as_ref());
+    let created_at = creation_secs(rs.metadata.creation_timestamp.as_ref());
     let raw_yaml = serde_yaml::to_string(rs).unwrap_or_default();
 
     ResourceItem {
         name,
         namespace,
         status: String::new(),
-        age,
+        created_at,
         extra: vec![
             ("desired".to_string(), desired),
             ("current".to_string(), current),
@@ -1073,14 +1073,14 @@ fn replication_controller_to_resource_item(rc: &ReplicationController) -> Resour
         ("0".to_string(), "0".to_string(), "0".to_string())
     };
 
-    let age = format_age(rc.metadata.creation_timestamp.as_ref());
+    let created_at = creation_secs(rc.metadata.creation_timestamp.as_ref());
     let raw_yaml = serde_yaml::to_string(rc).unwrap_or_default();
 
     ResourceItem {
         name,
         namespace,
         status: String::new(),
-        age,
+        created_at,
         extra: vec![
             ("desired".to_string(), desired),
             ("current".to_string(), current),
@@ -1106,14 +1106,14 @@ fn job_to_resource_item(job: &Job) -> ResourceItem {
         "0/1".to_string()
     };
 
-    let age = format_age(job.metadata.creation_timestamp.as_ref());
+    let created_at = creation_secs(job.metadata.creation_timestamp.as_ref());
     let raw_yaml = serde_yaml::to_string(job).unwrap_or_default();
 
     ResourceItem {
         name,
         namespace,
         status: String::new(),
-        age,
+        created_at,
         extra: vec![("completions".to_string(), completions)],
         raw_yaml,
     }
@@ -1141,14 +1141,14 @@ fn cronjob_to_resource_item(cj: &CronJob) -> ResourceItem {
         .map(|a| a.len().to_string())
         .unwrap_or_else(|| "0".to_string());
 
-    let age = format_age(cj.metadata.creation_timestamp.as_ref());
+    let created_at = creation_secs(cj.metadata.creation_timestamp.as_ref());
     let raw_yaml = serde_yaml::to_string(cj).unwrap_or_default();
 
     ResourceItem {
         name,
         namespace,
         status: String::new(),
-        age,
+        created_at,
         extra: vec![
             ("schedule".to_string(), schedule),
             ("suspend".to_string(), suspend),
@@ -1179,14 +1179,14 @@ fn hpa_to_resource_item(hpa: &HorizontalPodAutoscaler) -> ResourceItem {
         .map(|s| s.current_replicas.to_string())
         .unwrap_or_else(|| "0".to_string());
 
-    let age = format_age(hpa.metadata.creation_timestamp.as_ref());
+    let created_at = creation_secs(hpa.metadata.creation_timestamp.as_ref());
     let raw_yaml = serde_yaml::to_string(hpa).unwrap_or_default();
 
     ResourceItem {
         name,
         namespace,
         status: String::new(),
-        age,
+        created_at,
         extra: vec![
             ("minpods".to_string(), minpods),
             ("maxpods".to_string(), maxpods),
@@ -1229,14 +1229,14 @@ fn service_to_resource_item(svc: &Service) -> ResourceItem {
         })
         .unwrap_or_else(|| "<none>".to_string());
 
-    let age = format_age(svc.metadata.creation_timestamp.as_ref());
+    let created_at = creation_secs(svc.metadata.creation_timestamp.as_ref());
     let raw_yaml = serde_yaml::to_string(svc).unwrap_or_default();
 
     ResourceItem {
         name,
         namespace,
         status: String::new(),
-        age,
+        created_at,
         extra: vec![
             ("type".to_string(), svc_type),
             ("cluster-ip".to_string(), cluster_ip),
@@ -1275,14 +1275,14 @@ fn endpoints_to_resource_item(ep: &Endpoints) -> ResourceItem {
         })
         .unwrap_or_else(|| "<none>".to_string());
 
-    let age = format_age(ep.metadata.creation_timestamp.as_ref());
+    let created_at = creation_secs(ep.metadata.creation_timestamp.as_ref());
     let raw_yaml = serde_yaml::to_string(ep).unwrap_or_default();
 
     ResourceItem {
         name,
         namespace,
         status: String::new(),
-        age,
+        created_at,
         extra: vec![("endpoints".to_string(), endpoints)],
         raw_yaml,
     }
@@ -1310,14 +1310,14 @@ fn ingress_to_resource_item(ing: &Ingress) -> ResourceItem {
         })
         .unwrap_or_else(|| "*".to_string());
 
-    let age = format_age(ing.metadata.creation_timestamp.as_ref());
+    let created_at = creation_secs(ing.metadata.creation_timestamp.as_ref());
     let raw_yaml = serde_yaml::to_string(ing).unwrap_or_default();
 
     ResourceItem {
         name,
         namespace,
         status: String::new(),
-        age,
+        created_at,
         extra: vec![
             ("class".to_string(), class),
             ("hosts".to_string(), hosts),
@@ -1344,14 +1344,14 @@ fn network_policy_to_resource_item(np: &NetworkPolicy) -> ResourceItem {
         })
         .unwrap_or_else(|| "<all>".to_string());
 
-    let age = format_age(np.metadata.creation_timestamp.as_ref());
+    let created_at = creation_secs(np.metadata.creation_timestamp.as_ref());
     let raw_yaml = serde_yaml::to_string(np).unwrap_or_default();
 
     ResourceItem {
         name,
         namespace,
         status: String::new(),
-        age,
+        created_at,
         extra: vec![("pod-selector".to_string(), pod_selector)],
         raw_yaml,
     }
@@ -1364,14 +1364,14 @@ fn configmap_to_resource_item(cm: &ConfigMap) -> ResourceItem {
     let data_count = cm.data.as_ref().map(|d| d.len()).unwrap_or(0)
         + cm.binary_data.as_ref().map(|d| d.len()).unwrap_or(0);
 
-    let age = format_age(cm.metadata.creation_timestamp.as_ref());
+    let created_at = creation_secs(cm.metadata.creation_timestamp.as_ref());
     let raw_yaml = serde_yaml::to_string(cm).unwrap_or_default();
 
     ResourceItem {
         name,
         namespace,
         status: String::new(),
-        age,
+        created_at,
         extra: vec![("data".to_string(), data_count.to_string())],
         raw_yaml,
     }
@@ -1387,14 +1387,14 @@ fn secret_to_resource_item(secret: &Secret) -> ResourceItem {
         .unwrap_or_else(|| "Opaque".to_string());
     let data_count = secret.data.as_ref().map(|d| d.len()).unwrap_or(0);
 
-    let age = format_age(secret.metadata.creation_timestamp.as_ref());
+    let created_at = creation_secs(secret.metadata.creation_timestamp.as_ref());
     let raw_yaml = serde_yaml::to_string(secret).unwrap_or_default();
 
     ResourceItem {
         name,
         namespace,
         status: String::new(),
-        age,
+        created_at,
         extra: vec![
             ("type".to_string(), secret_type),
             ("data".to_string(), data_count.to_string()),
@@ -1429,14 +1429,14 @@ fn pvc_to_resource_item(pvc: &PersistentVolumeClaim) -> ResourceItem {
         )
     };
 
-    let age = format_age(pvc.metadata.creation_timestamp.as_ref());
+    let created_at = creation_secs(pvc.metadata.creation_timestamp.as_ref());
     let raw_yaml = serde_yaml::to_string(pvc).unwrap_or_default();
 
     ResourceItem {
         name,
         namespace,
         status,
-        age,
+        created_at,
         extra: vec![
             ("volume".to_string(), volume),
             ("capacity".to_string(), capacity),
@@ -1467,14 +1467,14 @@ fn pv_to_resource_item(pv: &PersistentVolume) -> ResourceItem {
         .and_then(|s| s.storage_class_name.clone())
         .unwrap_or_else(|| "<none>".to_string());
 
-    let age = format_age(pv.metadata.creation_timestamp.as_ref());
+    let created_at = creation_secs(pv.metadata.creation_timestamp.as_ref());
     let raw_yaml = serde_yaml::to_string(pv).unwrap_or_default();
 
     ResourceItem {
         name,
         namespace,
         status,
-        age,
+        created_at,
         extra: vec![
             ("capacity".to_string(), capacity),
             ("storageclass".to_string(), storageclass),
@@ -1489,14 +1489,14 @@ fn storageclass_to_resource_item(sc: &StorageClass) -> ResourceItem {
 
     let provisioner = sc.provisioner.clone();
 
-    let age = format_age(sc.metadata.creation_timestamp.as_ref());
+    let created_at = creation_secs(sc.metadata.creation_timestamp.as_ref());
     let raw_yaml = serde_yaml::to_string(sc).unwrap_or_default();
 
     ResourceItem {
         name,
         namespace,
         status: String::new(),
-        age,
+        created_at,
         extra: vec![("provisioner".to_string(), provisioner)],
         raw_yaml,
     }
@@ -1506,14 +1506,14 @@ fn serviceaccount_to_resource_item(sa: &ServiceAccount) -> ResourceItem {
     let name = ResourceExt::name_any(sa);
     let namespace = ResourceExt::namespace(sa).unwrap_or_default();
 
-    let age = format_age(sa.metadata.creation_timestamp.as_ref());
+    let created_at = creation_secs(sa.metadata.creation_timestamp.as_ref());
     let raw_yaml = serde_yaml::to_string(sa).unwrap_or_default();
 
     ResourceItem {
         name,
         namespace,
         status: String::new(),
-        age,
+        created_at,
         extra: vec![],
         raw_yaml,
     }
@@ -1528,14 +1528,14 @@ fn namespace_to_resource_item(ns: &Namespace) -> ResourceItem {
         .and_then(|s| s.phase.clone())
         .unwrap_or_else(|| "Unknown".to_string());
 
-    let age = format_age(ns.metadata.creation_timestamp.as_ref());
+    let created_at = creation_secs(ns.metadata.creation_timestamp.as_ref());
     let raw_yaml = serde_yaml::to_string(ns).unwrap_or_default();
 
     ResourceItem {
         name,
         namespace: String::new(),
         status,
-        age,
+        created_at,
         extra: vec![],
         raw_yaml,
     }
@@ -1583,14 +1583,14 @@ fn node_to_resource_item(node: &Node) -> ResourceItem {
         roles
     };
 
-    let age = format_age(node.metadata.creation_timestamp.as_ref());
+    let created_at = creation_secs(node.metadata.creation_timestamp.as_ref());
     let raw_yaml = serde_yaml::to_string(node).unwrap_or_default();
 
     ResourceItem {
         name,
         namespace: String::new(),
         status,
-        age,
+        created_at,
         extra: vec![("roles".to_string(), roles)],
         raw_yaml,
     }
@@ -1617,14 +1617,14 @@ fn event_to_resource_item(ev: &Event) -> ResourceItem {
         .clone()
         .unwrap_or_else(|| "<none>".to_string());
 
-    let age = format_age(ev.metadata.creation_timestamp.as_ref());
+    let created_at = creation_secs(ev.metadata.creation_timestamp.as_ref());
     let raw_yaml = serde_yaml::to_string(ev).unwrap_or_default();
 
     ResourceItem {
         name,
         namespace,
         status: String::new(),
-        age,
+        created_at,
         extra: vec![
             ("type".to_string(), ev_type),
             ("reason".to_string(), reason),
@@ -1637,14 +1637,14 @@ fn event_to_resource_item(ev: &Event) -> ResourceItem {
 fn resourcequota_to_resource_item(rq: &ResourceQuota) -> ResourceItem {
     let name = ResourceExt::name_any(rq);
     let namespace = ResourceExt::namespace(rq).unwrap_or_default();
-    let age = format_age(rq.metadata.creation_timestamp.as_ref());
+    let created_at = creation_secs(rq.metadata.creation_timestamp.as_ref());
     let raw_yaml = serde_yaml::to_string(rq).unwrap_or_default();
 
     ResourceItem {
         name,
         namespace,
         status: String::new(),
-        age,
+        created_at,
         extra: vec![],
         raw_yaml,
     }
@@ -1653,14 +1653,14 @@ fn resourcequota_to_resource_item(rq: &ResourceQuota) -> ResourceItem {
 fn limitrange_to_resource_item(lr: &LimitRange) -> ResourceItem {
     let name = ResourceExt::name_any(lr);
     let namespace = ResourceExt::namespace(lr).unwrap_or_default();
-    let age = format_age(lr.metadata.creation_timestamp.as_ref());
+    let created_at = creation_secs(lr.metadata.creation_timestamp.as_ref());
     let raw_yaml = serde_yaml::to_string(lr).unwrap_or_default();
 
     ResourceItem {
         name,
         namespace,
         status: String::new(),
-        age,
+        created_at,
         extra: vec![],
         raw_yaml,
     }
@@ -1689,14 +1689,14 @@ fn pdb_to_resource_item(pdb: &PodDisruptionBudget) -> ResourceItem {
         })
         .unwrap_or_else(|| "N/A".to_string());
 
-    let age = format_age(pdb.metadata.creation_timestamp.as_ref());
+    let created_at = creation_secs(pdb.metadata.creation_timestamp.as_ref());
     let raw_yaml = serde_yaml::to_string(pdb).unwrap_or_default();
 
     ResourceItem {
         name,
         namespace,
         status: String::new(),
-        age,
+        created_at,
         extra: vec![
             ("min-available".to_string(), min_available),
             ("max-unavailable".to_string(), max_unavailable),
@@ -1709,34 +1709,9 @@ fn pdb_to_resource_item(pdb: &PodDisruptionBudget) -> ResourceItem {
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn format_age(timestamp: Option<&Time>) -> String {
-    let Some(ts) = timestamp else {
-        return "<unknown>".to_string();
-    };
-
-    let now_secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs() as i64;
-    let ts_secs = ts.0.as_second();
-    let diff_secs = now_secs - ts_secs;
-
-    if diff_secs < 0 {
-        return "0s".to_string();
-    }
-
-    let days = diff_secs / 86400;
-    let hours = (diff_secs % 86400) / 3600;
-    let minutes = (diff_secs % 3600) / 60;
-    let seconds = diff_secs % 60;
-
-    if days > 0 {
-        format!("{}d{}h", days, hours)
-    } else if hours > 0 {
-        format!("{}h{}m", hours, minutes)
-    } else if minutes > 0 {
-        format!("{}m", minutes)
-    } else {
-        format!("{}s", seconds)
-    }
+/// Extracts the creation timestamp as Unix seconds, for storing on a
+/// [`ResourceItem`]. The age string is computed lazily at render time from
+/// this value (see [`crate::types::format_age_secs`]) so the UI stays live.
+fn creation_secs(timestamp: Option<&Time>) -> Option<i64> {
+    timestamp.map(|ts| ts.0.as_second())
 }

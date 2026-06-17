@@ -391,12 +391,22 @@ pub struct ResourceItem {
     pub name: String,
     pub namespace: String,
     pub status: String,
-    pub age: String,
+    /// Creation timestamp in Unix seconds, used to compute a live age.
+    /// `None` when the resource has no creation timestamp.
+    pub created_at: Option<i64>,
     pub extra: Vec<(String, String)>,
     pub raw_yaml: String,
 }
 
 impl ResourceItem {
+    /// Computes the human-readable age relative to the current time.
+    ///
+    /// Recomputed on every call (rather than stored as a string at fetch
+    /// time) so the UI refreshes the AGE column live on each render tick.
+    pub fn age(&self) -> String {
+        format_age_secs(self.created_at)
+    }
+
     /// Returns column values driven by an arbitrary slice of [`ColumnDef`]s.
     ///
     /// This is the primary column-value resolver. The renderer calls it
@@ -409,7 +419,7 @@ impl ResourceItem {
                 match key.as_str() {
                     "name" => self.name.clone(),
                     "status" | "phase" => self.status.clone(),
-                    "age" => self.age.clone(),
+                    "age" => self.age(),
                     "namespace" => self.namespace.clone(),
                     _ => self.extra_val(&key),
                 }
@@ -423,6 +433,41 @@ impl ResourceItem {
             .find(|(k, _)| k == key)
             .map(|(_, v)| v.clone())
             .unwrap_or_else(|| "<none>".to_string())
+    }
+}
+
+/// Formats a creation timestamp (Unix seconds) into a compact, kubectl-style
+/// age string relative to the current time, e.g. `3d2h`, `5m`, `12s`.
+///
+/// Returns `<unknown>` when no timestamp is available.
+pub fn format_age_secs(created_at: Option<i64>) -> String {
+    let Some(ts_secs) = created_at else {
+        return "<unknown>".to_string();
+    };
+
+    let now_secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+    let diff_secs = now_secs - ts_secs;
+
+    if diff_secs < 0 {
+        return "0s".to_string();
+    }
+
+    let days = diff_secs / 86400;
+    let hours = (diff_secs % 86400) / 3600;
+    let minutes = (diff_secs % 3600) / 60;
+    let seconds = diff_secs % 60;
+
+    if days > 0 {
+        format!("{}d{}h", days, hours)
+    } else if hours > 0 {
+        format!("{}h{}m", hours, minutes)
+    } else if minutes > 0 {
+        format!("{}m", minutes)
+    } else {
+        format!("{}s", seconds)
     }
 }
 
