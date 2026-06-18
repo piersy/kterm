@@ -658,4 +658,72 @@ mod tests {
             output
         );
     }
+
+    fn app_with_deployment() -> App {
+        let mut app = App::new();
+        app.focus = Focus::ResourceList;
+        app.selected_resource_types = vec![ResourceType::Deployments];
+        app.resources_by_type.insert(
+            ResourceType::Deployments,
+            vec![ResourceItem {
+                name: "web".to_string(),
+                namespace: "default".to_string(),
+                status: String::new(),
+                created_at: None,
+                extra: vec![],
+                raw_yaml: "apiVersion: apps/v1\nkind: Deployment\nspec:\n  replicas: 3\n"
+                    .to_string(),
+            }],
+        );
+        app.select_first_row();
+        app
+    }
+
+    #[test]
+    fn test_scale_popup_renders_name_and_replicas() {
+        let mut app = app_with_deployment();
+        app.handle_input(key(KeyCode::Char('s')));
+        // Type a new target value.
+        app.handle_input(key(KeyCode::Backspace));
+        app.handle_input(key(KeyCode::Char('5')));
+
+        let output = render_to_string(&mut app, 100, 24);
+
+        assert_eq!(app.view_mode, ViewMode::Scale);
+        assert!(output.contains("Scale"), "popup title, got:\n{}", output);
+        assert!(output.contains("web"), "resource name, got:\n{}", output);
+        assert!(
+            output.contains("Current replicas: 3"),
+            "current count, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("New replicas: 5"),
+            "typed value, got:\n{}",
+            output
+        );
+        // Scale-mode footer.
+        assert!(
+            output.contains("Enter:Apply"),
+            "scale footer, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_scale_footer_binding_gated_by_type() {
+        // Deployments are scalable: the list footer advertises s:Scale.
+        let mut app = app_with_deployment();
+        let output = render_to_string(&mut app, 140, 24);
+        assert!(output.contains("s:Scale"), "deployment footer, got:\n{}", output);
+
+        // Pods are not scalable: no s:Scale binding.
+        let mut pods = app_with_pods();
+        let pods_output = render_to_string(&mut pods, 140, 24);
+        assert!(
+            !pods_output.contains("s:Scale"),
+            "pods footer should not offer scale, got:\n{}",
+            pods_output
+        );
+    }
 }

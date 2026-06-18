@@ -9,6 +9,10 @@ use crate::types::{
     ViewMode, ALL_NAMESPACES_LABEL,
 };
 
+/// Maximum number of digits accepted in the scale popup (caps replicas at
+/// 999999, well above any realistic workload size).
+const MAX_SCALE_INPUT_DIGITS: usize = 6;
+
 pub struct App {
     // Navigation
     pub contexts: Vec<String>,
@@ -40,8 +44,11 @@ pub struct App {
     pub filter: String,
     pub filter_active: bool,
 
-    // Scale popup: buffer for the replica count being typed
+    // Scale popup: buffer for the replica count being typed, and the
+    // resource's current replica count captured when the popup opened
+    // (so the renderer need not re-parse YAML on every frame).
     pub scale_input: String,
+    pub scale_current: Option<i32>,
 
     // Error popup (modal, dismissed with any key)
     pub error_message: Option<String>,
@@ -139,6 +146,7 @@ impl App {
             filter_active: false,
 
             scale_input: String::new(),
+            scale_current: None,
 
             error_message: None,
             error_popup: false,
@@ -650,7 +658,7 @@ impl App {
             }
             KeyCode::Char(c) if c.is_ascii_digit() => {
                 // Cap the length to keep the value sane (max 999999 replicas).
-                if self.scale_input.len() < 6 {
+                if self.scale_input.len() < MAX_SCALE_INPUT_DIGITS {
                     self.scale_input.push(c);
                 }
                 InputAction::None
@@ -729,17 +737,17 @@ impl App {
                 InputAction::None
             }
             KeyCode::Char('s') => {
-                // Compute the pre-filled value before mutating self to avoid
-                // overlapping the immutable borrow from `selected_resource`.
-                let prefill = self.selected_resource().and_then(|(res, rt)| {
-                    if rt.supports_scale() {
-                        Some(res.replicas().map(|r| r.to_string()).unwrap_or_default())
-                    } else {
-                        None
-                    }
+                // Resolve scalability and the current replica count before
+                // mutating self to avoid overlapping the immutable borrow from
+                // `selected_resource`. The outer `Option` distinguishes "not
+                // scalable" (don't open) from "scalable but replicas unknown".
+                let current = self.selected_resource().and_then(|(res, rt)| {
+                    rt.supports_scale()
+                        .then(|| res.replicas().and_then(|r| i32::try_from(r).ok()))
                 });
-                if let Some(prefill) = prefill {
-                    self.scale_input = prefill;
+                if let Some(current) = current {
+                    self.scale_current = current;
+                    self.scale_input = current.map(|r| r.to_string()).unwrap_or_default();
                     self.view_mode = ViewMode::Scale;
                 }
                 InputAction::None

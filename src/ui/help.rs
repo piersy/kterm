@@ -125,11 +125,14 @@ pub fn render_scale_dialog(frame: &mut Frame, app: &App) {
 
     frame.render_widget(Clear, popup_area);
 
-    let (name, current) = app
+    // Borrow the name (no clone) and use the replica count captured when the
+    // popup opened, so this render path does no per-frame YAML parsing.
+    let name = app
         .selected_resource()
-        .map(|(res, _)| (res.name.clone(), res.replicas()))
-        .unwrap_or_default();
-    let current_str = current
+        .map(|(res, _)| res.name.as_str())
+        .unwrap_or("");
+    let current_str = app
+        .scale_current
         .map(|r| r.to_string())
         .unwrap_or_else(|| "unknown".to_string());
 
