@@ -242,8 +242,10 @@ mod tests {
         assert!(is_all_namespaces(app.current_namespace()));
     }
 
-    #[test]
-    fn test_namespace_all_stays_first_after_fuzzy_filter() {
+    /// Issue #24: the sentinel is pinned first only until the user types a
+    /// filter. A query that does not match `<all namespaces>` must order
+    /// results by relevance and drop the (non-matching) sentinel.
+    fn ns_filter_app() -> App {
         let mut app = App::new();
         app.namespaces = vec![
             ALL_NAMESPACES_LABEL.to_string(),
@@ -253,16 +255,49 @@ mod tests {
         app.selected_namespaces.clear();
         app.selected_namespaces.insert(1);
         app.focus = Focus::ResourceList;
+        app
+    }
 
+    #[test]
+    fn test_namespace_all_pinned_first_when_no_filter() {
+        let mut app = ns_filter_app();
+        app.handle_input(key(KeyCode::Char('n')));
+        assert_eq!(
+            app.dropdown_filtered.first().copied(),
+            Some(0),
+            "with no filter, all-namespaces is pinned first"
+        );
+    }
+
+    #[test]
+    fn test_namespace_all_ordered_by_relevance_after_filter() {
+        let mut app = ns_filter_app();
         app.handle_input(key(KeyCode::Char('n')));
         // Type a filter that does NOT match the sentinel label.
         app.handle_input(key(KeyCode::Char('b')));
         app.handle_input(key(KeyCode::Char('e')));
 
-        assert_eq!(
-            app.dropdown_filtered.first().copied(),
-            Some(0),
-            "all-namespaces must remain first even when fuzzy filter is active"
+        // "beta" (index 2) is the best match and should be first; the
+        // non-matching sentinel (index 0) must not be pinned or shown.
+        assert_eq!(app.dropdown_filtered.first().copied(), Some(2));
+        assert!(
+            !app.dropdown_filtered.contains(&0),
+            "non-matching all-namespaces sentinel should be filtered out"
+        );
+    }
+
+    #[test]
+    fn test_namespace_all_shown_ranked_when_filter_matches() {
+        let mut app = ns_filter_app();
+        app.handle_input(key(KeyCode::Char('n')));
+        // "all" matches the sentinel label, so it should appear in the
+        // filtered results (ranked by score, not force-pinned).
+        for c in "all".chars() {
+            app.handle_input(key(KeyCode::Char(c)));
+        }
+        assert!(
+            app.dropdown_filtered.contains(&0),
+            "all-namespaces should appear when the query matches it"
         );
     }
 
