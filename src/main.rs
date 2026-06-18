@@ -576,21 +576,58 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                             }
                         });
                     }
-                    InputAction::OpenLogsInEditor => {
-                        if !app.log_lines.is_empty() {
-                            events.suspend();
-                            disable_raw_mode()?;
+                    InputAction::Scale(replicas) => {
+                        let (name, ns, rt) = {
+                            if let Some((res, rt)) = app.selected_resource() {
+                                (res.name.clone(), res.namespace.clone(), rt)
+                            } else {
+                                continue;
+                            }
+                        };
+                        // Use the resource's own namespace so Scale works
+                        // correctly when the "all namespaces" option is
+                        // selected.
+                        let ns = if ns.is_empty() {
+                            app.current_namespace().to_string()
+                        } else {
+                            ns
+                        };
+                        let mgr = k8s_manager.clone();
+                        let action_tx = tx.clone();
 
-                            let _ = open_logs_in_editor(&app.log_lines);
-
-                            // Editor's LeaveAlternateScreen put us on the main screen;
-                            // re-enter alternate screen so kterm draws there, not on scrollback.
-                            execute!(terminal.backend_mut(), EnterAlternateScreen)?;
-                            enable_raw_mode()?;
-                            terminal.clear()?;
-                            events.resume();
-                        }
+                        tokio::spawn(async move {
+                            let guard = mgr.lock().await;
+                            if let Some(ref manager) = *guard {
+                                let client = manager.client.clone();
+                                drop(guard);
+                                if let Err(e) = k8s::actions::scale_resource(
+                                    client, &ns, &name, rt, replicas,
+                                )
+                                .await
+                                {
+                                    event::send_event(&action_tx,AppEvent::K8sError(format!(
+                                        "Scale error: {}",
+                                        e
+                                    )));
+                                }
+                            }
+                        });
                     }
+                    InputAction::OpenLogsInEditor => {
+                    if !app.log_lines.is_empty() {
+                        events.suspend();
+                        disable_raw_mode()?;
+
+                        let _ = open_logs_in_editor(&app.log_lines);
+
+                        // Editor's LeaveAlternateScreen put us on the main screen;
+                        // re-enter alternate screen so kterm draws there, not on scrollback.
+                        execute!(terminal.backend_mut(), EnterAlternateScreen)?;
+                        enable_raw_mode()?;
+                        terminal.clear()?;
+                        events.resume();
+                    }
+                }
                     InputAction::OpenLogsInLess => {
                         if !app.log_lines.is_empty() {
                             let client_and_pod = if app.entered_from_search {

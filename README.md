@@ -39,7 +39,7 @@ Fuzzy search (`Ctrl+F`) searches across all clusters, namespaces, and resource t
 - **Real-time updates** -- watches resources via the Kubernetes API; changes appear automatically
 - **Detail view** -- formatted description with conditions, containers, events, and full YAML
 - **Log streaming** -- tail pod logs with follow mode, scroll through history
-- **Actions** -- delete, restart (`R`, rollout restart for StatefulSets), edit YAML in `$EDITOR`, exec into a pod (no `kubectl` required -- runs over the existing kube client)
+- **Actions** -- delete, restart (`R`, rollout restart for StatefulSets), scale (set replicas on Deployments/StatefulSets/ReplicaSets via `s`), edit YAML in `$EDITOR`, exec into a pod (no `kubectl` required -- runs over the existing kube client)
 - **Related components** -- press `r` to pull up every object sharing the selected resource's `app.kubernetes.io/instance` label (deployments, pods, services, config maps...) in one grouped view; the label is configurable
 - **Fuzzy search** -- `Ctrl+F` to search across all clusters, namespaces, and resource types at once; results show name, type, namespace, and cluster side by side
 - **Filtering** -- search resources by name with `/`
@@ -123,6 +123,7 @@ The app reads your kubeconfig and connects to the current context. If no cluster
 | `d` | Delete (with confirmation) |
 | `r` | Related components (objects sharing the configured label) |
 | `R` | Restart (with confirmation) |
+| `s` | Scale (Deployments/StatefulSets/ReplicaSets) |
 | `e` | Edit YAML in `$EDITOR` |
 | `x` | Exec into pod (interactive shell over the kube client) |
 | `/` | Filter by name |

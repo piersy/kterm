@@ -17,6 +17,9 @@ fn resource_list_bindings(app: &App) -> String {
     if rt.map(|t| t.supports_restart()).unwrap_or(app.primary_resource_type().supports_restart()) {
         parts.push("R:Restart");
     }
+    if rt.map(|t| t.supports_scale()).unwrap_or(app.primary_resource_type().supports_scale()) {
+        parts.push("s:Scale");
+    }
     parts.push("r:Related");
     parts.push("e:Edit");
     if rt.map(|t| t.supports_exec()).unwrap_or(app.primary_resource_type().supports_exec()) {
@@ -82,6 +85,7 @@ pub fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
         ViewMode::Logs => "Esc:Back  f:Follow  j/k:Scroll  g/G:Top/Bottom  o:Vim  O:Less",
         ViewMode::Confirm(_) => "y:Confirm  Any other key:Cancel",
         ViewMode::Related => "Esc:Back  j/k:Nav  (related components)",
+        ViewMode::Scale => "Type a number  Enter:Apply  Backspace:Edit  Esc:Cancel",
         ViewMode::Search => "Esc:Back  Down/Up:Nav  Enter:Detail  Type to search...",
     };
 
@@ -109,6 +113,40 @@ pub fn render_confirm_dialog(frame: &mut Frame, action: ConfirmAction) {
         .title(format!(" Confirm {} ", action))
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Red));
+
+    let paragraph = Paragraph::new(text)
+        .block(block)
+        .style(Style::default().fg(Color::White));
+
+    frame.render_widget(paragraph, popup_area);
+}
+
+pub fn render_scale_dialog(frame: &mut Frame, app: &App) {
+    let area = frame.area();
+    let popup_area = centered_rect(50, 8, area);
+
+    frame.render_widget(Clear, popup_area);
+
+    // Borrow the name (no clone) and use the replica count captured when the
+    // popup opened, so this render path does no per-frame YAML parsing.
+    let name = app
+        .selected_resource()
+        .map(|(res, _)| res.name.as_str())
+        .unwrap_or("");
+    let current_str = app
+        .scale_current
+        .map(|r| r.to_string())
+        .unwrap_or_else(|| "unknown".to_string());
+
+    let text = format!(
+        "Scale '{}'\n\nCurrent replicas: {}\nNew replicas: {}\n\nPress Enter to apply, Esc to cancel.",
+        name, current_str, app.scale_input
+    );
+
+    let block = Block::default()
+        .title(" Scale ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan));
 
     let paragraph = Paragraph::new(text)
         .block(block)

@@ -254,6 +254,20 @@ impl ResourceType {
         )
     }
 
+    /// Returns true if this resource type supports scaling its replica count.
+    ///
+    /// DaemonSets are intentionally excluded: Kubernetes runs one DaemonSet
+    /// pod per node, so they have no `spec.replicas` field or `/scale`
+    /// subresource and cannot be scaled.
+    pub fn supports_scale(&self) -> bool {
+        matches!(
+            self,
+            ResourceType::Deployments
+                | ResourceType::StatefulSets
+                | ResourceType::ReplicaSets
+        )
+    }
+
     #[allow(dead_code)]
     /// Returns true for cluster-scoped resources (not namespaced).
     pub fn is_cluster_scoped(&self) -> bool {
@@ -308,6 +322,7 @@ pub enum ViewMode {
     /// Showing the components related to a selected resource (objects sharing
     /// the configured label value), laid out like the multi-type view.
     Related,
+    Scale,
     Search,
 }
 
@@ -422,6 +437,16 @@ impl ResourceItem {
             .get(key)?
             .as_str()
             .map(|s| s.to_string())
+    }
+
+    /// Reads the current `.spec.replicas` value from the raw YAML, if present.
+    ///
+    /// Used to pre-fill and display the current replica count when scaling.
+    /// Returns `None` for resources without a replicas field or when the
+    /// YAML cannot be parsed.
+    pub fn replicas(&self) -> Option<i64> {
+        let value: serde_yaml::Value = serde_yaml::from_str(&self.raw_yaml).ok()?;
+        value.get("spec")?.get("replicas")?.as_i64()
     }
 
     /// Returns column values driven by an arbitrary slice of [`ColumnDef`]s.

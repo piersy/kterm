@@ -9,6 +9,10 @@ use crate::types::{
     ViewMode, ALL_NAMESPACES_LABEL,
 };
 
+/// Maximum number of digits accepted in the scale popup (caps replicas at
+/// 999999, well above any realistic workload size).
+const MAX_SCALE_INPUT_DIGITS: usize = 6;
+
 pub struct App {
     // Navigation
     pub contexts: Vec<String>,
@@ -60,6 +64,12 @@ pub struct App {
     // Filter
     pub filter: String,
     pub filter_active: bool,
+
+    // Scale popup: buffer for the replica count being typed, and the
+    // resource's current replica count captured when the popup opened
+    // (so the renderer need not re-parse YAML on every frame).
+    pub scale_input: String,
+    pub scale_current: Option<i32>,
 
     // Error popup (modal, dismissed with any key)
     pub error_message: Option<String>,
@@ -165,6 +175,9 @@ impl App {
             filter: String::new(),
             filter_active: false,
 
+            scale_input: String::new(),
+            scale_current: None,
+
             error_message: None,
             error_popup: false,
 
@@ -195,31 +208,31 @@ impl App {
 
     /// Returns the first selected context name (primary context for K8s operations).
     pub fn current_context(&self) -> &str {
-        self.selected_contexts
-            .iter()
-            .min()
-            .and_then(|&idx| self.contexts.get(idx))
-            .map(|s| s.as_str())
-            .unwrap_or("")
-    }
+    self.selected_contexts
+        .iter()
+        .min()
+        .and_then(|&idx| self.contexts.get(idx))
+        .map(|s| s.as_str())
+        .unwrap_or("")
+}
 
     /// Returns the first selected namespace name (primary namespace for K8s operations).
     pub fn current_namespace(&self) -> &str {
-        self.selected_namespaces
-            .iter()
-            .min()
-            .and_then(|&idx| self.namespaces.get(idx))
-            .map(|s| s.as_str())
-            .unwrap_or("")
-    }
+    self.selected_namespaces
+        .iter()
+        .min()
+        .and_then(|&idx| self.namespaces.get(idx))
+        .map(|s| s.as_str())
+        .unwrap_or("")
+}
 
     /// Returns the primary resource type (first selected).
     pub fn primary_resource_type(&self) -> ResourceType {
-        self.selected_resource_types
-            .first()
-            .copied()
-            .unwrap_or(ResourceType::Pods)
-    }
+    self.selected_resource_types
+        .first()
+        .copied()
+        .unwrap_or(ResourceType::Pods)
+}
 
     /// Build the flat list of display rows for the multi-type view.
     ///
@@ -227,44 +240,25 @@ impl App {
     /// related resources (always with type dividers, no name filter); otherwise
     /// it flattens the live watched resources for the selected types.
     pub fn display_rows(&self) -> Vec<DisplayRow> {
-        if self.view_mode == ViewMode::Related {
-            return self.related_display_rows();
-        }
-
-        let mut rows = Vec::new();
-        let multi_type = self.selected_resource_types.len() > 1;
-
-        for &rt in &self.selected_resource_types {
-            let items = self.resources_by_type.get(&rt);
-            if multi_type {
-                rows.push(DisplayRow::TypeDivider(rt));
-            }
-
-            if let Some(items) = items {
-                let filter_lower = self.filter.to_lowercase();
-                for (i, item) in items.iter().enumerate() {
-                    if self.filter.is_empty()
-                        || item.name.to_lowercase().contains(&filter_lower)
-                    {
-                        rows.push(DisplayRow::Resource {
-                            resource_type: rt,
-                            index: i,
-                        });
-                    }
-                }
-            }
-        }
-        rows
+    if self.view_mode == ViewMode::Related {
+        return self.related_display_rows();
     }
 
-    /// Flatten the related-components dataset into display rows, always grouped
-    /// under a per-type divider so the originating types are labelled.
-    fn related_display_rows(&self) -> Vec<DisplayRow> {
-        let mut rows = Vec::new();
-        for &rt in &self.related_types {
+    let mut rows = Vec::new();
+    let multi_type = self.selected_resource_types.len() > 1;
+
+    for &rt in &self.selected_resource_types {
+        let items = self.resources_by_type.get(&rt);
+        if multi_type {
             rows.push(DisplayRow::TypeDivider(rt));
-            if let Some(items) = self.related_by_type.get(&rt) {
-                for i in 0..items.len() {
+        }
+
+        if let Some(items) = items {
+            let filter_lower = self.filter.to_lowercase();
+            for (i, item) in items.iter().enumerate() {
+                if self.filter.is_empty()
+                    || item.name.to_lowercase().contains(&filter_lower)
+                {
                     rows.push(DisplayRow::Resource {
                         resource_type: rt,
                         index: i,
@@ -272,68 +266,87 @@ impl App {
                 }
             }
         }
-        rows
     }
+    rows
+}
+
+    /// Flatten the related-components dataset into display rows, always grouped
+    /// under a per-type divider so the originating types are labelled.
+    fn related_display_rows(&self) -> Vec<DisplayRow> {
+    let mut rows = Vec::new();
+    for &rt in &self.related_types {
+        rows.push(DisplayRow::TypeDivider(rt));
+        if let Some(items) = self.related_by_type.get(&rt) {
+            for i in 0..items.len() {
+                rows.push(DisplayRow::Resource {
+                    resource_type: rt,
+                    index: i,
+                });
+            }
+        }
+    }
+    rows
+}
 
     /// The resource map backing the current view (related vs live).
     fn current_resources(&self) -> &HashMap<ResourceType, Vec<ResourceItem>> {
-        if self.view_mode == ViewMode::Related {
-            &self.related_by_type
-        } else {
-            &self.resources_by_type
-        }
+    if self.view_mode == ViewMode::Related {
+        &self.related_by_type
+    } else {
+        &self.resources_by_type
     }
+}
 
     /// Look up the [`ResourceItem`] for a [`DisplayRow::Resource`] cell in the
     /// current view's dataset. Used by the renderer.
     pub fn row_item(&self, resource_type: ResourceType, index: usize) -> Option<&ResourceItem> {
-        self.current_resources().get(&resource_type)?.get(index)
-    }
+    self.current_resources().get(&resource_type)?.get(index)
+}
 
     /// Get the resource at the current table selection.
     pub fn selected_resource(&self) -> Option<(&ResourceItem, ResourceType)> {
-        let idx = self.table_state.selected()?;
-        let rows = self.display_rows();
-        match rows.get(idx)? {
-            DisplayRow::Resource {
-                resource_type,
-                index,
-            } => {
-                let item = self.current_resources().get(resource_type)?.get(*index)?;
-                Some((item, *resource_type))
-            }
-            DisplayRow::TypeDivider(_) => None,
+    let idx = self.table_state.selected()?;
+    let rows = self.display_rows();
+    match rows.get(idx)? {
+        DisplayRow::Resource {
+            resource_type,
+            index,
+        } => {
+            let item = self.current_resources().get(resource_type)?.get(*index)?;
+            Some((item, *resource_type))
         }
+        DisplayRow::TypeDivider(_) => None,
     }
+}
 
     /// Get the resource type of the currently selected row.
     pub fn selected_row_resource_type(&self) -> Option<ResourceType> {
-        let idx = self.table_state.selected()?;
-        let rows = self.display_rows();
-        match rows.get(idx)? {
-            DisplayRow::Resource { resource_type, .. } => Some(*resource_type),
-            DisplayRow::TypeDivider(rt) => Some(*rt),
-        }
+    let idx = self.table_state.selected()?;
+    let rows = self.display_rows();
+    match rows.get(idx)? {
+        DisplayRow::Resource { resource_type, .. } => Some(*resource_type),
+        DisplayRow::TypeDivider(rt) => Some(*rt),
     }
+}
 
     #[allow(dead_code)]
     /// Legacy compatibility: flat list of all resources matching filter.
     pub fn filtered_resources(&self) -> Vec<&ResourceItem> {
-        let rt = self.primary_resource_type();
-        let items = match self.resources_by_type.get(&rt) {
-            Some(items) => items,
-            None => return Vec::new(),
-        };
-        if self.filter.is_empty() {
-            items.iter().collect()
-        } else {
-            let filter_lower = self.filter.to_lowercase();
-            items
-                .iter()
-                .filter(|r| r.name.to_lowercase().contains(&filter_lower))
-                .collect()
-        }
+    let rt = self.primary_resource_type();
+    let items = match self.resources_by_type.get(&rt) {
+        Some(items) => items,
+        None => return Vec::new(),
+    };
+    if self.filter.is_empty() {
+        items.iter().collect()
+    } else {
+        let filter_lower = self.filter.to_lowercase();
+        items
+            .iter()
+            .filter(|r| r.name.to_lowercase().contains(&filter_lower))
+            .collect()
     }
+}
 
     pub fn selected_search_result(&self) -> Option<&SearchResult> {
         let idx = self.search_table_state.selected()?;
@@ -365,204 +378,204 @@ impl App {
 
     /// Returns the list of items for the currently active selector.
     pub fn dropdown_items(&self) -> Vec<String> {
-        match self.focus {
-            Focus::Selector(SelectorTarget::Context) => self
-                .contexts
-                .iter()
-                .map(|c| {
-                    if self.unreachable_contexts.contains(c) {
-                        format!("{} (unreachable)", c)
-                    } else {
-                        c.clone()
-                    }
-                })
-                .collect(),
-            Focus::Selector(SelectorTarget::Namespace) => self.namespaces.clone(),
-            Focus::Selector(SelectorTarget::ResourceType) => {
-                self.visible_resource_types()
-                    .into_iter()
-                    .map(|(label, _)| label)
-                    .collect()
-            }
-            Focus::ResourceList => Vec::new(),
+    match self.focus {
+        Focus::Selector(SelectorTarget::Context) => self
+            .contexts
+            .iter()
+            .map(|c| {
+                if self.unreachable_contexts.contains(c) {
+                    format!("{} (unreachable)", c)
+                } else {
+                    c.clone()
+                }
+            })
+            .collect(),
+        Focus::Selector(SelectorTarget::Namespace) => self.namespaces.clone(),
+        Focus::Selector(SelectorTarget::ResourceType) => {
+            self.visible_resource_types()
+                .into_iter()
+                .map(|(label, _)| label)
+                .collect()
         }
+        Focus::ResourceList => Vec::new(),
     }
+}
 
     /// Returns visible resource types as (display_label, ALL_index) pairs.
     pub fn visible_resource_types(&self) -> Vec<(String, usize)> {
-        if self.resource_counts.is_empty() {
-            ResourceType::ALL
-                .iter()
-                .enumerate()
-                .map(|(i, t)| (t.to_string(), i))
-                .collect()
-        } else {
-            ResourceType::ALL
-                .iter()
-                .enumerate()
-                .filter_map(|(i, t)| {
-                    // Distinguish between:
-                    //   Some(n) where n > 0 : type has resources -> show with count
-                    //   Some(0)             : type verified empty -> hide unless selected
-                    //   None                : count fetch failed (timeout/error) -> show
-                    //                         (don't hide types just because their count
-                    //                         request failed)
-                    match self.resource_counts.get(t) {
-                        Some(&count) if count > 0 => {
-                            Some((format!("{} ({})", t, count), i))
-                        }
-                        Some(_) => {
-                            // Verified zero — only show if currently selected
-                            if self.selected_resource_types.contains(t) {
-                                Some((t.to_string(), i))
-                            } else {
-                                None
-                            }
-                        }
-                        None => {
-                            // Count unknown (fetch failed/timed out) — show the
-                            // type so the user can still select it
+    if self.resource_counts.is_empty() {
+        ResourceType::ALL
+            .iter()
+            .enumerate()
+            .map(|(i, t)| (t.to_string(), i))
+            .collect()
+    } else {
+        ResourceType::ALL
+            .iter()
+            .enumerate()
+            .filter_map(|(i, t)| {
+                // Distinguish between:
+                //   Some(n) where n > 0 : type has resources -> show with count
+                //   Some(0)             : type verified empty -> hide unless selected
+                //   None                : count fetch failed (timeout/error) -> show
+                //                         (don't hide types just because their count
+                //                         request failed)
+                match self.resource_counts.get(t) {
+                    Some(&count) if count > 0 => {
+                        Some((format!("{} ({})", t, count), i))
+                    }
+                    Some(_) => {
+                        // Verified zero — only show if currently selected
+                        if self.selected_resource_types.contains(t) {
                             Some((t.to_string(), i))
+                        } else {
+                            None
                         }
                     }
-                })
-                .collect()
-        }
+                    None => {
+                        // Count unknown (fetch failed/timed out) — show the
+                        // type so the user can still select it
+                        Some((t.to_string(), i))
+                    }
+                }
+            })
+            .collect()
     }
+}
 
     /// Maps a dropdown item index (for ResourceTypeSelector) back to a ResourceType::ALL index.
     fn resource_type_all_index(&self, dropdown_item_idx: usize) -> usize {
-        let visible = self.visible_resource_types();
-        visible
-            .get(dropdown_item_idx)
-            .map(|(_, all_idx)| *all_idx)
-            .unwrap_or(0)
-    }
+    let visible = self.visible_resource_types();
+    visible
+        .get(dropdown_item_idx)
+        .map(|(_, all_idx)| *all_idx)
+        .unwrap_or(0)
+}
 
     /// Open a selector overlay.
     pub fn open_selector(&mut self, target: SelectorTarget) {
-        self.focus = Focus::Selector(target);
-        self.dropdown_query.clear();
-        self.dropdown_visible = true;
-        self.dropdown_toggled.clear();
+    self.focus = Focus::Selector(target);
+    self.dropdown_query.clear();
+    self.dropdown_visible = true;
+    self.dropdown_toggled.clear();
 
-        self.update_dropdown_filter();
-        // Pre-select the first item
-        self.dropdown_selected = 0;
-    }
+    self.update_dropdown_filter();
+    // Pre-select the first item
+    self.dropdown_selected = 0;
+}
 
     /// Re-filter the dropdown items using fuzzy match on the query.
     pub fn update_dropdown_filter(&mut self) {
-        let items = self.dropdown_items();
-        if self.dropdown_query.is_empty() {
-            self.dropdown_filtered = (0..items.len()).collect();
-        } else {
-            let mut scored: Vec<(usize, i64)> = items
-                .iter()
-                .enumerate()
-                .filter_map(|(i, item)| {
-                    fuzzy_match(&self.dropdown_query, item).map(|score| (i, score))
-                })
-                .collect();
-            scored.sort_by_key(|s| Reverse(s.1));
-            self.dropdown_filtered = scored.into_iter().map(|(i, _)| i).collect();
-        }
+    let items = self.dropdown_items();
+    if self.dropdown_query.is_empty() {
+        self.dropdown_filtered = (0..items.len()).collect();
+    } else {
+        let mut scored: Vec<(usize, i64)> = items
+            .iter()
+            .enumerate()
+            .filter_map(|(i, item)| {
+                fuzzy_match(&self.dropdown_query, item).map(|score| (i, score))
+            })
+            .collect();
+        scored.sort_by_key(|s| Reverse(s.1));
+        self.dropdown_filtered = scored.into_iter().map(|(i, _)| i).collect();
+    }
 
-        // Pin the "all namespaces" entry to the top of the namespace selector,
-        // regardless of fuzzy-match score. It is always shown so the user can
-        // select cluster-wide scoping at any time.
-        if matches!(self.focus, Focus::Selector(SelectorTarget::Namespace)) {
-            if let Some(all_idx) = items
-                .iter()
-                .position(|it| it == ALL_NAMESPACES_LABEL)
-            {
-                self.dropdown_filtered.retain(|&i| i != all_idx);
-                self.dropdown_filtered.insert(0, all_idx);
-            }
-        }
-
-        if self.dropdown_filtered.is_empty() {
-            self.dropdown_selected = 0;
-        } else {
-            self.dropdown_selected =
-                self.dropdown_selected.min(self.dropdown_filtered.len().saturating_sub(1));
+    // Pin the "all namespaces" entry to the top of the namespace selector,
+    // regardless of fuzzy-match score. It is always shown so the user can
+    // select cluster-wide scoping at any time.
+    if matches!(self.focus, Focus::Selector(SelectorTarget::Namespace)) {
+        if let Some(all_idx) = items
+            .iter()
+            .position(|it| it == ALL_NAMESPACES_LABEL)
+        {
+            self.dropdown_filtered.retain(|&i| i != all_idx);
+            self.dropdown_filtered.insert(0, all_idx);
         }
     }
+
+    if self.dropdown_filtered.is_empty() {
+        self.dropdown_selected = 0;
+    } else {
+        self.dropdown_selected =
+            self.dropdown_selected.min(self.dropdown_filtered.len().saturating_sub(1));
+    }
+}
 
     /// Confirm the dropdown selection (Enter). Selects all toggled items + the currently
     /// highlighted item, then closes the selector.
     fn dropdown_confirm(&mut self) -> InputAction {
-        if !self.dropdown_visible {
-            self.focus = Focus::ResourceList;
-            return InputAction::None;
-        }
-
-        // Add the currently highlighted item to toggles (if not already)
-        if let Some(&item_idx) = self.dropdown_filtered.get(self.dropdown_selected) {
-            self.dropdown_toggled.insert(item_idx);
-        }
-
-        let action = match self.focus {
-            Focus::Selector(SelectorTarget::Context) => {
-                if self.dropdown_toggled.is_empty() {
-                    InputAction::None
-                } else if self.dropdown_toggled != self.selected_contexts {
-                    self.selected_contexts = self.dropdown_toggled.clone();
-                    InputAction::ContextChanged
-                } else {
-                    InputAction::None
-                }
-            }
-            Focus::Selector(SelectorTarget::Namespace) => {
-                if self.dropdown_toggled.is_empty() {
-                    InputAction::None
-                } else if self.dropdown_toggled != self.selected_namespaces {
-                    self.selected_namespaces = self.dropdown_toggled.clone();
-                    InputAction::NamespaceChanged
-                } else {
-                    InputAction::None
-                }
-            }
-            Focus::Selector(SelectorTarget::ResourceType) => {
-                let new_types: Vec<ResourceType> = self
-                    .dropdown_toggled
-                    .iter()
-                    .copied()
-                    .collect::<Vec<_>>()
-                    .into_iter()
-                    .map(|idx| {
-                        let all_idx = self.resource_type_all_index(idx);
-                        ResourceType::ALL[all_idx]
-                    })
-                    .collect();
-
-                if new_types.is_empty() {
-                    InputAction::None
-                } else {
-                    // Sort by ALL index order for consistent display
-                    let mut sorted: Vec<ResourceType> = new_types;
-                    sorted.sort_by_key(|rt| {
-                        ResourceType::ALL.iter().position(|t| t == rt).unwrap_or(0)
-                    });
-                    sorted.dedup();
-                    if sorted != self.selected_resource_types {
-                        self.selected_resource_types = sorted;
-                        InputAction::ResourceTypeChanged
-                    } else {
-                        InputAction::None
-                    }
-                }
-            }
-            Focus::ResourceList => InputAction::None,
-        };
-
-        // Close selector and return to resource list
+    if !self.dropdown_visible {
         self.focus = Focus::ResourceList;
-        self.dropdown_visible = false;
-        self.dropdown_toggled.clear();
-        self.select_first_row();
-        action
+        return InputAction::None;
     }
+
+    // Add the currently highlighted item to toggles (if not already)
+    if let Some(&item_idx) = self.dropdown_filtered.get(self.dropdown_selected) {
+        self.dropdown_toggled.insert(item_idx);
+    }
+
+    let action = match self.focus {
+        Focus::Selector(SelectorTarget::Context) => {
+            if self.dropdown_toggled.is_empty() {
+                InputAction::None
+            } else if self.dropdown_toggled != self.selected_contexts {
+                self.selected_contexts = self.dropdown_toggled.clone();
+                InputAction::ContextChanged
+            } else {
+                InputAction::None
+            }
+        }
+        Focus::Selector(SelectorTarget::Namespace) => {
+            if self.dropdown_toggled.is_empty() {
+                InputAction::None
+            } else if self.dropdown_toggled != self.selected_namespaces {
+                self.selected_namespaces = self.dropdown_toggled.clone();
+                InputAction::NamespaceChanged
+            } else {
+                InputAction::None
+            }
+        }
+        Focus::Selector(SelectorTarget::ResourceType) => {
+            let new_types: Vec<ResourceType> = self
+                .dropdown_toggled
+                .iter()
+                .copied()
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|idx| {
+                    let all_idx = self.resource_type_all_index(idx);
+                    ResourceType::ALL[all_idx]
+                })
+                .collect();
+
+            if new_types.is_empty() {
+                InputAction::None
+            } else {
+                // Sort by ALL index order for consistent display
+                let mut sorted: Vec<ResourceType> = new_types;
+                sorted.sort_by_key(|rt| {
+                    ResourceType::ALL.iter().position(|t| t == rt).unwrap_or(0)
+                });
+                sorted.dedup();
+                if sorted != self.selected_resource_types {
+                    self.selected_resource_types = sorted;
+                    InputAction::ResourceTypeChanged
+                } else {
+                    InputAction::None
+                }
+            }
+        }
+        Focus::ResourceList => InputAction::None,
+    };
+
+    // Close selector and return to resource list
+    self.focus = Focus::ResourceList;
+    self.dropdown_visible = false;
+    self.dropdown_toggled.clear();
+    self.select_first_row();
+    action
+}
 
     pub fn handle_tick(&mut self) {
         // Error popup is modal — no auto-dismiss, user must press a key.
@@ -581,9 +594,9 @@ impl App {
 
     /// Increment the generation counter, invalidating all in-flight events.
     pub fn next_generation(&mut self) -> u64 {
-        self.generation += 1;
-        self.generation
-    }
+    self.generation += 1;
+    self.generation
+}
 
     pub fn handle_input(&mut self, key: KeyEvent) -> InputAction {
         // Global quit
@@ -633,6 +646,7 @@ impl App {
             ViewMode::Logs => self.handle_logs_input(key),
             ViewMode::Confirm(_) => unreachable!(),
             ViewMode::Related => self.handle_related_input(key),
+            ViewMode::Scale => self.handle_scale_input(key),
             ViewMode::Search => self.handle_search_input(key),
         }
     }
@@ -640,35 +654,35 @@ impl App {
     /// Handle input while the related-components view is open: navigate the
     /// list, or Esc to return to the previous view.
     fn handle_related_input(&mut self, key: KeyEvent) -> InputAction {
-        match key.code {
-            KeyCode::Char('q') | KeyCode::Esc => {
-                self.leave_related_view();
-                InputAction::None
-            }
-            KeyCode::Char('j') | KeyCode::Down => {
-                self.select_next();
-                InputAction::None
-            }
-            KeyCode::Char('k') | KeyCode::Up => {
-                self.select_prev();
-                InputAction::None
-            }
-            _ => InputAction::None,
+    match key.code {
+        KeyCode::Char('q') | KeyCode::Esc => {
+            self.leave_related_view();
+            InputAction::None
         }
+        KeyCode::Char('j') | KeyCode::Down => {
+            self.select_next();
+            InputAction::None
+        }
+        KeyCode::Char('k') | KeyCode::Up => {
+            self.select_prev();
+            InputAction::None
+        }
+        _ => InputAction::None,
     }
+}
 
     /// Restore the view that was active before the related-components view and
     /// clear the related dataset.
     fn leave_related_view(&mut self) {
-        self.view_mode = self.previous_view;
-        self.related_by_type.clear();
-        self.related_types.clear();
-        self.related_label_value.clear();
-        self.related_loading = false;
-        // Reset selection so a stale related-row index isn't reused by the
-        // restored view.
-        self.select_first_row();
-    }
+    self.view_mode = self.previous_view;
+    self.related_by_type.clear();
+    self.related_types.clear();
+    self.related_label_value.clear();
+    self.related_loading = false;
+    // Reset selection so a stale related-row index isn't reused by the
+    // restored view.
+    self.select_first_row();
+}
 
     /// Open the related-components view for the currently selected resource.
     ///
@@ -677,56 +691,56 @@ impl App {
     /// label there is nothing related to show, so an error popup is shown and
     /// the view does not change.
     fn open_related_view(&mut self) -> InputAction {
-        // Resolve the label value + namespace before mutating self (avoids
-        // overlapping the immutable borrow from `selected_resource`).
-        let info = self.selected_resource().and_then(|(res, _)| {
-            res.label(&self.related_label).map(|value| {
-                let ns = if res.namespace.is_empty() {
-                    String::new()
-                } else {
-                    res.namespace.clone()
-                };
-                (value, ns)
-            })
-        });
-        match info {
-            Some((value, ns)) => {
-                let ns = if ns.is_empty() {
-                    self.current_namespace().to_string()
-                } else {
-                    ns
-                };
-                self.previous_view = self.view_mode;
-                self.related_label_value = value;
-                self.related_namespace = ns;
-                self.related_by_type.clear();
-                self.related_types.clear();
-                self.related_loading = true;
-                // New request: supersedes any in-flight fetch.
-                self.related_request = self.related_request.wrapping_add(1);
-                self.view_mode = ViewMode::Related;
-                self.table_state.select(None);
-                InputAction::RelatedComponents
-            }
-            None => {
-                self.error_message = Some(format!(
-                    "Selected resource has no '{}' label — no related components.",
-                    self.related_label
-                ));
-                self.error_popup = true;
-                InputAction::None
-            }
+    // Resolve the label value + namespace before mutating self (avoids
+    // overlapping the immutable borrow from `selected_resource`).
+    let info = self.selected_resource().and_then(|(res, _)| {
+        res.label(&self.related_label).map(|value| {
+            let ns = if res.namespace.is_empty() {
+                String::new()
+            } else {
+                res.namespace.clone()
+            };
+            (value, ns)
+        })
+    });
+    match info {
+        Some((value, ns)) => {
+            let ns = if ns.is_empty() {
+                self.current_namespace().to_string()
+            } else {
+                ns
+            };
+            self.previous_view = self.view_mode;
+            self.related_label_value = value;
+            self.related_namespace = ns;
+            self.related_by_type.clear();
+            self.related_types.clear();
+            self.related_loading = true;
+            // New request: supersedes any in-flight fetch.
+            self.related_request = self.related_request.wrapping_add(1);
+            self.view_mode = ViewMode::Related;
+            self.table_state.select(None);
+            InputAction::RelatedComponents
+        }
+        None => {
+            self.error_message = Some(format!(
+                "Selected resource has no '{}' label — no related components.",
+                self.related_label
+            ));
+            self.error_popup = true;
+            InputAction::None
         }
     }
+}
 
     /// Populate the related-components dataset from a completed fetch and select
     /// the first row.
     pub fn set_related_resources(&mut self, results: Vec<(ResourceType, Vec<ResourceItem>)>) {
-        self.related_types = results.iter().map(|(rt, _)| *rt).collect();
-        self.related_by_type = results.into_iter().collect();
-        self.related_loading = false;
-        self.select_first_row();
-    }
+    self.related_types = results.iter().map(|(rt, _)| *rt).collect();
+    self.related_by_type = results.into_iter().collect();
+    self.related_loading = false;
+    self.select_first_row();
+}
 
     /// Apply a completed related-components fetch only if it still matches the
     /// current request: the related view is open, a fetch is in flight, and the
@@ -734,20 +748,20 @@ impl App {
     /// re-triggered for a different resource/namespace) is discarded. Returns
     /// whether the result was applied.
     pub fn apply_related_resources(
-        &mut self,
-        request: u64,
-        results: Vec<(ResourceType, Vec<ResourceItem>)>,
-    ) -> bool {
-        if self.view_mode == ViewMode::Related
-            && self.related_loading
-            && self.related_request == request
-        {
-            self.set_related_resources(results);
-            true
-        } else {
-            false
-        }
+    &mut self,
+    request: u64,
+    results: Vec<(ResourceType, Vec<ResourceItem>)>,
+) -> bool {
+    if self.view_mode == ViewMode::Related
+        && self.related_loading
+        && self.related_request == request
+    {
+        self.set_related_resources(results);
+        true
+    } else {
+        false
     }
+}
 
     fn handle_filter_input(&mut self, key: KeyEvent) -> InputAction {
         match key.code {
@@ -800,6 +814,42 @@ impl App {
             }
         }
     }
+
+    /// Handles input while the scale popup is open.
+    ///
+    /// Accepts digits (building up the replica count), Backspace to edit,
+    /// Enter to apply, and Esc to cancel. Invalid or empty input on Enter
+    /// keeps the popup open rather than applying a bad value.
+    fn handle_scale_input(&mut self, key: KeyEvent) -> InputAction {
+    match key.code {
+        KeyCode::Esc => {
+            self.view_mode = ViewMode::List;
+            self.scale_input.clear();
+            InputAction::None
+        }
+        KeyCode::Enter => match self.scale_input.trim().parse::<i32>() {
+            Ok(replicas) if replicas >= 0 => {
+                self.view_mode = ViewMode::List;
+                self.scale_input.clear();
+                InputAction::Scale(replicas)
+            }
+            // Keep the popup open on empty or invalid input.
+            _ => InputAction::None,
+        },
+        KeyCode::Backspace => {
+            self.scale_input.pop();
+            InputAction::None
+        }
+        KeyCode::Char(c) if c.is_ascii_digit() => {
+            // Cap the length to keep the value sane (max 999999 replicas).
+            if self.scale_input.len() < MAX_SCALE_INPUT_DIGITS {
+                self.scale_input.push(c);
+            }
+            InputAction::None
+        }
+        _ => InputAction::None,
+    }
+}
 
     fn handle_list_input(&mut self, key: KeyEvent) -> InputAction {
         match self.focus {
@@ -870,6 +920,22 @@ impl App {
                     if rt.supports_restart() {
                         self.view_mode = ViewMode::Confirm(ConfirmAction::Restart);
                     }
+                }
+                InputAction::None
+            }
+            KeyCode::Char('s') => {
+                // Resolve scalability and the current replica count before
+                // mutating self to avoid overlapping the immutable borrow from
+                // `selected_resource`. The outer `Option` distinguishes "not
+                // scalable" (don't open) from "scalable but replicas unknown".
+                let current = self.selected_resource().and_then(|(res, rt)| {
+                    rt.supports_scale()
+                        .then(|| res.replicas().and_then(|r| i32::try_from(r).ok()))
+                });
+                if let Some(current) = current {
+                    self.scale_current = current;
+                    self.scale_input = current.map(|r| r.to_string()).unwrap_or_default();
+                    self.view_mode = ViewMode::Scale;
                 }
                 InputAction::None
             }
@@ -1265,19 +1331,19 @@ impl App {
 
     /// Select the first non-divider row in the display, or None if empty.
     pub fn select_first_row(&mut self) {
-        let rows = self.display_rows();
-        if rows.is_empty() {
-            self.table_state.select(None);
+    let rows = self.display_rows();
+    if rows.is_empty() {
+        self.table_state.select(None);
+        return;
+    }
+    for (i, row) in rows.iter().enumerate() {
+        if matches!(row, DisplayRow::Resource { .. }) {
+            self.table_state.select(Some(i));
             return;
         }
-        for (i, row) in rows.iter().enumerate() {
-            if matches!(row, DisplayRow::Resource { .. }) {
-                self.table_state.select(Some(i));
-                return;
-            }
-        }
-        self.table_state.select(None);
     }
+    self.table_state.select(None);
+}
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1292,6 +1358,7 @@ pub enum InputAction {
     Delete,
     Restart,
     RelatedComponents,
+    Scale(i32),
     Edit,
     Exec,
     OpenLogsInEditor,
