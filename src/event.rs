@@ -27,8 +27,8 @@ pub enum AppEvent {
     /// Result of a "related components" fetch: per-type lists of objects that
     /// share the requested label value.
     RelatedResourcesLoaded {
-        /// The label value that was requested, used to discard stale results.
-        label_value: String,
+        /// Id of the originating request, used to discard superseded results.
+        request: u64,
         results: Vec<(ResourceType, Vec<ResourceItem>)>,
     },
     NamespacesLoaded(Vec<String>),

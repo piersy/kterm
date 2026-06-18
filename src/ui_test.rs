@@ -708,4 +708,23 @@ mod tests {
         assert!(output.contains("R:Restart"), "remapped restart, got:\n{}", output);
         assert!(output.contains("r:Related"), "related hint, got:\n{}", output);
     }
+
+    #[test]
+    fn test_related_view_renders_none_found_when_empty() {
+        // Label present but nothing else shares it: the view opens and reports
+        // "none found" rather than erroring.
+        let mut app = App::new();
+        app.previous_view = ViewMode::List;
+        app.view_mode = ViewMode::Related;
+        app.related_label = "app.kubernetes.io/instance".to_string();
+        app.related_label_value = "lonely".to_string();
+        app.related_namespace = "default".to_string();
+        app.related_loading = false;
+        app.set_related_resources(vec![]); // no matches
+
+        let output = render_to_string(&mut app, 120, 24);
+        assert!(output.contains("none found"), "empty title, got:\n{}", output);
+        // The scoped namespace is shown in the title.
+        assert!(output.contains("default"), "namespace in title, got:\n{}", output);
+    }
 }

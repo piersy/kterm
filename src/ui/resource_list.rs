@@ -181,9 +181,14 @@ fn render_multi_type(frame: &mut Frame, app: &mut App, area: Rect, display_rows:
         } else {
             ""
         };
+        let ns = if is_all_namespaces(&app.related_namespace) {
+            "all namespaces".to_string()
+        } else {
+            app.related_namespace.clone()
+        };
         format!(
-            " Related: {}={}{} ",
-            app.related_label, app.related_label_value, status
+            " Related: {}={} in {}{} ",
+            app.related_label, app.related_label_value, ns, status
         )
     } else {
         let types_display: String = app

@@ -494,6 +494,7 @@ pub const RELATED_RESOURCE_TYPES: &[ResourceType] = &[
     ResourceType::StatefulSets,
     ResourceType::DaemonSets,
     ResourceType::ReplicaSets,
+    ResourceType::ReplicationControllers,
     ResourceType::Pods,
     ResourceType::Jobs,
     ResourceType::CronJobs,
@@ -511,8 +512,10 @@ pub const RELATED_RESOURCE_TYPES: &[ResourceType] = &[
 
 /// Gather every related object in `namespace` carrying `label_key=label_value`,
 /// across [`RELATED_RESOURCE_TYPES`]. Returns only the types that have at least
-/// one match, preserving the order of `RELATED_RESOURCE_TYPES`. Per-type errors
-/// are logged and skipped so one failing type does not abort the whole view.
+/// one match, preserving the order of `RELATED_RESOURCE_TYPES`. The per-type
+/// lists run concurrently (like [`count_all_resources`]) so total latency is
+/// one round trip, not the sum. Per-type errors are logged and skipped so one
+/// failing type does not abort the whole view.
 pub async fn list_related_resources(
     client: Client,
     namespace: &str,
@@ -520,15 +523,23 @@ pub async fn list_related_resources(
     label_value: &str,
 ) -> Vec<(ResourceType, Vec<ResourceItem>)> {
     let selector = format!("{}={}", label_key, label_value);
+    let fetches = RELATED_RESOURCE_TYPES.iter().map(|&rt| {
+        let client = client.clone();
+        let selector = selector.clone();
+        let namespace = namespace.to_string();
+        async move { (rt, list_namespaced_labelled(client, &namespace, rt, &selector).await) }
+    });
+    // `join_all` preserves input order, so the result keeps the canonical
+    // RELATED_RESOURCE_TYPES ordering.
+    let results = futures::future::join_all(fetches).await;
     let mut out = Vec::new();
-    for &rt in RELATED_RESOURCE_TYPES {
-        match list_namespaced_labelled(client.clone(), namespace, rt, &selector).await {
+    for (rt, res) in results {
+        match res {
             Ok(items) if !items.is_empty() => out.push((rt, items)),
             Ok(_) => {}
-            Err(e) => crate::logging::log_error(&format!(
-                "Related list for {} failed: {}",
-                rt, e
-            )),
+            Err(e) => {
+                crate::logging::log_error(&format!("Related list for {} failed: {}", rt, e))
+            }
         }
     }
     out
@@ -553,6 +564,9 @@ async fn list_namespaced_labelled(
         }
         ResourceType::ReplicaSets => {
             list_labelled(ns_api::<ReplicaSet>(client, namespace), selector, replicaset_to_resource_item).await
+        }
+        ResourceType::ReplicationControllers => {
+            list_labelled(ns_api::<ReplicationController>(client, namespace), selector, replication_controller_to_resource_item).await
         }
         ResourceType::Pods => {
             list_labelled(ns_api::<Pod>(client, namespace), selector, pod_to_resource_item).await

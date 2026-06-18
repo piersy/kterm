@@ -975,6 +975,54 @@ mod tests {
         assert_ne!(first, app.table_state.selected());
     }
 
+    #[test]
+    fn test_open_related_bumps_request_id() {
+        let mut app = app_with_labelled_deployment();
+        let before = app.related_request;
+        app.handle_input(key(KeyCode::Char('r')));
+        assert_eq!(app.related_request, before + 1);
+    }
+
+    #[test]
+    fn test_apply_related_resources_rejects_stale_request() {
+        let mut app = App::new();
+        app.view_mode = ViewMode::Related;
+        app.previous_view = ViewMode::List;
+        app.related_loading = true;
+        app.related_request = 5;
+
+        // A result tagged with a superseded request id is discarded: this
+        // guards against a late fetch from a different namespace whose label
+        // value happens to collide.
+        let applied = app.apply_related_resources(
+            4,
+            vec![(ResourceType::Pods, vec![fake_labelled("Pod", "stale", "a")])],
+        );
+        assert!(!applied);
+        assert!(app.related_by_type.is_empty());
+        assert!(app.related_loading, "still waiting for the live request");
+
+        // The matching request id is applied.
+        let applied = app.apply_related_resources(
+            5,
+            vec![(ResourceType::Pods, vec![fake_labelled("Pod", "live", "a")])],
+        );
+        assert!(applied);
+        assert!(!app.related_loading);
+        assert_eq!(app.related_by_type[&ResourceType::Pods][0].name, "live");
+    }
+
+    #[test]
+    fn test_apply_related_resources_rejected_when_not_in_related_view() {
+        let mut app = App::new();
+        // Not in the related view (e.g. user already pressed Esc).
+        app.view_mode = ViewMode::List;
+        app.related_loading = true;
+        app.related_request = 1;
+        let applied = app.apply_related_resources(1, vec![]);
+        assert!(!applied);
+    }
+
     // --- Fuzzy Search Tests ---
 
     use crate::types::{fuzzy_match, SearchResult};

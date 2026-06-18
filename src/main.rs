@@ -548,11 +548,12 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                         });
                     }
                     InputAction::RelatedComponents => {
-                        // The label key/value + namespace were captured into
-                        // app state when the related view was opened.
+                        // The label key/value + namespace + request id were
+                        // captured into app state when the view was opened.
                         let label_key = app.related_label.clone();
                         let label_value = app.related_label_value.clone();
                         let ns = app.related_namespace.clone();
+                        let request = app.related_request;
                         let mgr = k8s_manager.clone();
                         let action_tx = tx.clone();
 
@@ -570,10 +571,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                                 .await;
                                 event::send_event(
                                     &action_tx,
-                                    AppEvent::RelatedResourcesLoaded {
-                                        label_value,
-                                        results,
-                                    },
+                                    AppEvent::RelatedResourcesLoaded { request, results },
                                 );
                             }
                         });
@@ -954,18 +952,10 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                     }
                 }
             }
-            AppEvent::RelatedResourcesLoaded {
-                label_value,
-                results,
-            } => {
-                // Apply only if the related view is still open and waiting for
-                // this exact request (the user may have left or re-triggered).
-                if app.view_mode == types::ViewMode::Related
-                    && app.related_loading
-                    && app.related_label_value == label_value
-                {
-                    app.set_related_resources(results);
-                }
+            AppEvent::RelatedResourcesLoaded { request, results } => {
+                // Discards superseded results (user left the view or
+                // re-triggered for a different resource/namespace).
+                app.apply_related_resources(request, results);
             }
             AppEvent::NamespacesLoaded(namespaces) => {
                 // Prepend the "all namespaces" sentinel so it's always the

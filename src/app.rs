@@ -50,6 +50,10 @@ pub struct App {
     pub related_types: Vec<ResourceType>,
     /// True while the related-components fetch is in flight.
     pub related_loading: bool,
+    /// Monotonic id of the current related-components request. Bumped on each
+    /// open so a late result from a superseded request (e.g. a different
+    /// namespace with a colliding label value) is discarded.
+    pub related_request: u64,
     /// View to restore when leaving the related view with Esc.
     pub previous_view: ViewMode,
 
@@ -155,6 +159,7 @@ impl App {
             related_by_type: HashMap::new(),
             related_types: Vec::new(),
             related_loading: false,
+            related_request: 0,
             previous_view: ViewMode::List,
 
             filter: String::new(),
@@ -697,6 +702,8 @@ impl App {
                 self.related_by_type.clear();
                 self.related_types.clear();
                 self.related_loading = true;
+                // New request: supersedes any in-flight fetch.
+                self.related_request = self.related_request.wrapping_add(1);
                 self.view_mode = ViewMode::Related;
                 self.table_state.select(None);
                 InputAction::RelatedComponents
@@ -713,12 +720,33 @@ impl App {
     }
 
     /// Populate the related-components dataset from a completed fetch and select
-    /// the first row. Called by the main loop on `RelatedResourcesLoaded`.
+    /// the first row.
     pub fn set_related_resources(&mut self, results: Vec<(ResourceType, Vec<ResourceItem>)>) {
         self.related_types = results.iter().map(|(rt, _)| *rt).collect();
         self.related_by_type = results.into_iter().collect();
         self.related_loading = false;
         self.select_first_row();
+    }
+
+    /// Apply a completed related-components fetch only if it still matches the
+    /// current request: the related view is open, a fetch is in flight, and the
+    /// request id matches. A superseded result (the user left the view or
+    /// re-triggered for a different resource/namespace) is discarded. Returns
+    /// whether the result was applied.
+    pub fn apply_related_resources(
+        &mut self,
+        request: u64,
+        results: Vec<(ResourceType, Vec<ResourceItem>)>,
+    ) -> bool {
+        if self.view_mode == ViewMode::Related
+            && self.related_loading
+            && self.related_request == request
+        {
+            self.set_related_resources(results);
+            true
+        } else {
+            false
+        }
     }
 
     fn handle_filter_input(&mut self, key: KeyEvent) -> InputAction {
