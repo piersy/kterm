@@ -545,6 +545,43 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                             }
                         });
                     }
+                    InputAction::Scale(replicas) => {
+                        let (name, ns, rt) = {
+                            if let Some((res, rt)) = app.selected_resource() {
+                                (res.name.clone(), res.namespace.clone(), rt)
+                            } else {
+                                continue;
+                            }
+                        };
+                        // Use the resource's own namespace so Scale works
+                        // correctly when the "all namespaces" option is
+                        // selected.
+                        let ns = if ns.is_empty() {
+                            app.current_namespace().to_string()
+                        } else {
+                            ns
+                        };
+                        let mgr = k8s_manager.clone();
+                        let action_tx = tx.clone();
+
+                        tokio::spawn(async move {
+                            let guard = mgr.lock().await;
+                            if let Some(ref manager) = *guard {
+                                let client = manager.client.clone();
+                                drop(guard);
+                                if let Err(e) = k8s::actions::scale_resource(
+                                    client, &ns, &name, rt, replicas,
+                                )
+                                .await
+                                {
+                                    event::send_event(&action_tx,AppEvent::K8sError(format!(
+                                        "Scale error: {}",
+                                        e
+                                    )));
+                                }
+                            }
+                        });
+                    }
                     InputAction::OpenLogsInEditor => {
                         if !app.log_lines.is_empty() {
                             events.suspend();

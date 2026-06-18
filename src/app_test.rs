@@ -588,6 +588,207 @@ mod tests {
         assert_eq!(app.view_mode, ViewMode::List);
     }
 
+    fn fake_deployment(name: &str, replicas: i64) -> ResourceItem {
+        ResourceItem {
+            name: name.to_string(),
+            namespace: "default".to_string(),
+            status: String::new(),
+            created_at: None,
+            extra: vec![],
+            raw_yaml: format!(
+                "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: {}\nspec:\n  replicas: {}\n",
+                name, replicas
+            ),
+        }
+    }
+
+    fn app_with_deployments(replicas: i64) -> App {
+        let mut app = App::new();
+        app.focus = Focus::ResourceList;
+        app.selected_resource_types = vec![ResourceType::Deployments];
+        app.resources_by_type.insert(
+            ResourceType::Deployments,
+            vec![fake_deployment("web", replicas)],
+        );
+        app.select_first_row();
+        app
+    }
+
+    /// Builds an app showing a single scalable resource of the given kind,
+    /// with `raw_yaml` carrying `spec.replicas`.
+    fn app_with_scalable(rt: ResourceType, kind: &str, replicas: i64) -> App {
+        let mut app = App::new();
+        app.focus = Focus::ResourceList;
+        app.selected_resource_types = vec![rt];
+        app.resources_by_type.insert(
+            rt,
+            vec![ResourceItem {
+                name: "wl".to_string(),
+                namespace: "default".to_string(),
+                status: String::new(),
+                created_at: None,
+                extra: vec![],
+                raw_yaml: format!(
+                    "apiVersion: apps/v1\nkind: {}\nspec:\n  replicas: {}\n",
+                    kind, replicas
+                ),
+            }],
+        );
+        app.select_first_row();
+        app
+    }
+
+    #[test]
+    fn test_scale_opens_popup_prefilled_with_current_replicas() {
+        let mut app = app_with_deployments(3);
+        let action = app.handle_input(key(KeyCode::Char('s')));
+        assert_eq!(action, InputAction::None);
+        assert_eq!(app.view_mode, ViewMode::Scale);
+        // Pre-filled with the current replica count read from raw YAML.
+        assert_eq!(app.scale_input, "3");
+    }
+
+    #[test]
+    fn test_scale_type_and_apply() {
+        let mut app = app_with_deployments(3);
+        app.handle_input(key(KeyCode::Char('s')));
+        // Clear the prefill then type a new value.
+        app.handle_input(key(KeyCode::Backspace));
+        assert_eq!(app.scale_input, "");
+        app.handle_input(key(KeyCode::Char('5')));
+        assert_eq!(app.scale_input, "5");
+
+        let action = app.handle_input(key(KeyCode::Enter));
+        assert_eq!(action, InputAction::Scale(5));
+        assert_eq!(app.view_mode, ViewMode::List);
+        assert_eq!(app.scale_input, "");
+    }
+
+    #[test]
+    fn test_scale_to_zero_is_allowed() {
+        let mut app = app_with_deployments(3);
+        app.handle_input(key(KeyCode::Char('s')));
+        app.handle_input(key(KeyCode::Backspace));
+        app.handle_input(key(KeyCode::Char('0')));
+        let action = app.handle_input(key(KeyCode::Enter));
+        assert_eq!(action, InputAction::Scale(0));
+    }
+
+    #[test]
+    fn test_scale_cancel_with_esc() {
+        let mut app = app_with_deployments(3);
+        app.handle_input(key(KeyCode::Char('s')));
+        assert_eq!(app.view_mode, ViewMode::Scale);
+
+        let action = app.handle_input(key(KeyCode::Esc));
+        assert_eq!(action, InputAction::None);
+        assert_eq!(app.view_mode, ViewMode::List);
+        assert_eq!(app.scale_input, "");
+    }
+
+    #[test]
+    fn test_scale_empty_input_keeps_popup_open() {
+        let mut app = app_with_deployments(3);
+        app.handle_input(key(KeyCode::Char('s')));
+        // Delete the prefilled "3" so the buffer is empty.
+        app.handle_input(key(KeyCode::Backspace));
+        assert_eq!(app.scale_input, "");
+
+        let action = app.handle_input(key(KeyCode::Enter));
+        assert_eq!(action, InputAction::None);
+        // Still in the scale popup; nothing applied.
+        assert_eq!(app.view_mode, ViewMode::Scale);
+    }
+
+    #[test]
+    fn test_scale_ignores_non_digit_characters() {
+        let mut app = app_with_deployments(3);
+        app.handle_input(key(KeyCode::Char('s')));
+        app.handle_input(key(KeyCode::Backspace));
+        app.handle_input(key(KeyCode::Char('a')));
+        app.handle_input(key(KeyCode::Char('-')));
+        assert_eq!(app.scale_input, "");
+    }
+
+    /// Pods are not scalable, so `s` must be a no-op.
+    #[test]
+    fn test_scale_rejected_for_non_scalable_type() {
+        let mut app = app_with_pods();
+        let action = app.handle_input(key(KeyCode::Char('s')));
+        assert_eq!(action, InputAction::None);
+        assert_eq!(app.view_mode, ViewMode::List);
+    }
+
+    #[test]
+    fn test_supports_scale() {
+        assert!(ResourceType::Deployments.supports_scale());
+        assert!(ResourceType::StatefulSets.supports_scale());
+        assert!(ResourceType::ReplicaSets.supports_scale());
+        // DaemonSets have no replicas field and cannot be scaled.
+        assert!(!ResourceType::DaemonSets.supports_scale());
+        assert!(!ResourceType::Pods.supports_scale());
+        assert!(!ResourceType::Services.supports_scale());
+    }
+
+    #[test]
+    fn test_resource_item_replicas_parsing() {
+        assert_eq!(fake_deployment("web", 7).replicas(), Some(7));
+        // A pod has no spec.replicas.
+        assert_eq!(fake_pod("pod-0", "Running").replicas(), None);
+    }
+
+    #[test]
+    fn test_scale_input_length_capped() {
+        let mut app = app_with_deployments(3);
+        app.handle_input(key(KeyCode::Char('s')));
+        app.handle_input(key(KeyCode::Backspace)); // clear the "3" prefill
+        for c in "1234567".chars() {
+            app.handle_input(key(KeyCode::Char(c)));
+        }
+        // The 7th digit is dropped by the length cap.
+        assert_eq!(app.scale_input, "123456");
+    }
+
+    #[test]
+    fn test_scale_opens_for_statefulset_and_replicaset() {
+        for (rt, kind) in [
+            (ResourceType::StatefulSets, "StatefulSet"),
+            (ResourceType::ReplicaSets, "ReplicaSet"),
+        ] {
+            let mut app = app_with_scalable(rt, kind, 4);
+            let action = app.handle_input(key(KeyCode::Char('s')));
+            assert_eq!(action, InputAction::None);
+            assert_eq!(app.view_mode, ViewMode::Scale, "{} should open scale", kind);
+            assert_eq!(app.scale_input, "4", "{} prefill", kind);
+            assert_eq!(app.scale_current, Some(4));
+        }
+    }
+
+    #[test]
+    fn test_scale_open_with_missing_replicas_has_empty_prefill() {
+        let mut app = App::new();
+        app.focus = Focus::ResourceList;
+        app.selected_resource_types = vec![ResourceType::Deployments];
+        app.resources_by_type.insert(
+            ResourceType::Deployments,
+            vec![ResourceItem {
+                name: "web".to_string(),
+                namespace: "default".to_string(),
+                status: String::new(),
+                created_at: None,
+                extra: vec![],
+                // Scalable kind but no spec.replicas set.
+                raw_yaml: "apiVersion: apps/v1\nkind: Deployment\nspec: {}\n".to_string(),
+            }],
+        );
+        app.select_first_row();
+
+        app.handle_input(key(KeyCode::Char('s')));
+        assert_eq!(app.view_mode, ViewMode::Scale);
+        assert_eq!(app.scale_input, "");
+        assert_eq!(app.scale_current, None);
+    }
+
     #[test]
     fn test_edit_action() {
         let mut app = app_with_pods();

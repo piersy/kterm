@@ -9,6 +9,10 @@ use crate::types::{
     ViewMode, ALL_NAMESPACES_LABEL,
 };
 
+/// Maximum number of digits accepted in the scale popup (caps replicas at
+/// 999999, well above any realistic workload size).
+const MAX_SCALE_INPUT_DIGITS: usize = 6;
+
 pub struct App {
     // Navigation
     pub contexts: Vec<String>,
@@ -39,6 +43,12 @@ pub struct App {
     // Filter
     pub filter: String,
     pub filter_active: bool,
+
+    // Scale popup: buffer for the replica count being typed, and the
+    // resource's current replica count captured when the popup opened
+    // (so the renderer need not re-parse YAML on every frame).
+    pub scale_input: String,
+    pub scale_current: Option<i32>,
 
     // Error popup (modal, dismissed with any key)
     pub error_message: Option<String>,
@@ -134,6 +144,9 @@ impl App {
 
             filter: String::new(),
             filter_active: false,
+
+            scale_input: String::new(),
+            scale_current: None,
 
             error_message: None,
             error_popup: false,
@@ -561,6 +574,7 @@ impl App {
             ViewMode::Logs if self.entered_from_search => self.handle_search_logs_input(key),
             ViewMode::Logs => self.handle_logs_input(key),
             ViewMode::Confirm(_) => unreachable!(),
+            ViewMode::Scale => self.handle_scale_input(key),
             ViewMode::Search => self.handle_search_input(key),
         }
     }
@@ -614,6 +628,42 @@ impl App {
                 self.view_mode = ViewMode::List;
                 InputAction::None
             }
+        }
+    }
+
+    /// Handles input while the scale popup is open.
+    ///
+    /// Accepts digits (building up the replica count), Backspace to edit,
+    /// Enter to apply, and Esc to cancel. Invalid or empty input on Enter
+    /// keeps the popup open rather than applying a bad value.
+    fn handle_scale_input(&mut self, key: KeyEvent) -> InputAction {
+        match key.code {
+            KeyCode::Esc => {
+                self.view_mode = ViewMode::List;
+                self.scale_input.clear();
+                InputAction::None
+            }
+            KeyCode::Enter => match self.scale_input.trim().parse::<i32>() {
+                Ok(replicas) if replicas >= 0 => {
+                    self.view_mode = ViewMode::List;
+                    self.scale_input.clear();
+                    InputAction::Scale(replicas)
+                }
+                // Keep the popup open on empty or invalid input.
+                _ => InputAction::None,
+            },
+            KeyCode::Backspace => {
+                self.scale_input.pop();
+                InputAction::None
+            }
+            KeyCode::Char(c) if c.is_ascii_digit() => {
+                // Cap the length to keep the value sane (max 999999 replicas).
+                if self.scale_input.len() < MAX_SCALE_INPUT_DIGITS {
+                    self.scale_input.push(c);
+                }
+                InputAction::None
+            }
+            _ => InputAction::None,
         }
     }
 
@@ -683,6 +733,22 @@ impl App {
                     if rt.supports_restart() {
                         self.view_mode = ViewMode::Confirm(ConfirmAction::Restart);
                     }
+                }
+                InputAction::None
+            }
+            KeyCode::Char('s') => {
+                // Resolve scalability and the current replica count before
+                // mutating self to avoid overlapping the immutable borrow from
+                // `selected_resource`. The outer `Option` distinguishes "not
+                // scalable" (don't open) from "scalable but replicas unknown".
+                let current = self.selected_resource().and_then(|(res, rt)| {
+                    rt.supports_scale()
+                        .then(|| res.replicas().and_then(|r| i32::try_from(r).ok()))
+                });
+                if let Some(current) = current {
+                    self.scale_current = current;
+                    self.scale_input = current.map(|r| r.to_string()).unwrap_or_default();
+                    self.view_mode = ViewMode::Scale;
                 }
                 InputAction::None
             }
@@ -1103,6 +1169,7 @@ pub enum InputAction {
     StopLogs,
     Delete,
     Restart,
+    Scale(i32),
     Edit,
     Exec,
     OpenLogsInEditor,
