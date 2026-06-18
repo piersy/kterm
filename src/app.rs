@@ -36,6 +36,23 @@ pub struct App {
     // Mode
     pub view_mode: ViewMode,
 
+    // Related-components view
+    /// Label key (from config) that groups related components.
+    pub related_label: String,
+    /// The label value being shown (for the related view's title).
+    pub related_label_value: String,
+    /// Namespace the related components were fetched from.
+    pub related_namespace: String,
+    /// Separately-fetched related resources (kept out of the live watched
+    /// `resources_by_type` so the watch is undisturbed).
+    pub related_by_type: HashMap<ResourceType, Vec<ResourceItem>>,
+    /// Ordered list of types that have at least one related resource.
+    pub related_types: Vec<ResourceType>,
+    /// True while the related-components fetch is in flight.
+    pub related_loading: bool,
+    /// View to restore when leaving the related view with Esc.
+    pub previous_view: ViewMode,
+
     // Filter
     pub filter: String,
     pub filter_active: bool,
@@ -132,6 +149,14 @@ impl App {
 
             view_mode: ViewMode::List,
 
+            related_label: crate::config::DEFAULT_RELATED_LABEL.to_string(),
+            related_label_value: String::new(),
+            related_namespace: String::new(),
+            related_by_type: HashMap::new(),
+            related_types: Vec::new(),
+            related_loading: false,
+            previous_view: ViewMode::List,
+
             filter: String::new(),
             filter_active: false,
 
@@ -191,8 +216,16 @@ impl App {
             .unwrap_or(ResourceType::Pods)
     }
 
-    /// Build the flat list of display rows for multi-type view.
+    /// Build the flat list of display rows for the multi-type view.
+    ///
+    /// View-aware: in [`ViewMode::Related`] it flattens the separately-fetched
+    /// related resources (always with type dividers, no name filter); otherwise
+    /// it flattens the live watched resources for the selected types.
     pub fn display_rows(&self) -> Vec<DisplayRow> {
+        if self.view_mode == ViewMode::Related {
+            return self.related_display_rows();
+        }
+
         let mut rows = Vec::new();
         let multi_type = self.selected_resource_types.len() > 1;
 
@@ -219,6 +252,39 @@ impl App {
         rows
     }
 
+    /// Flatten the related-components dataset into display rows, always grouped
+    /// under a per-type divider so the originating types are labelled.
+    fn related_display_rows(&self) -> Vec<DisplayRow> {
+        let mut rows = Vec::new();
+        for &rt in &self.related_types {
+            rows.push(DisplayRow::TypeDivider(rt));
+            if let Some(items) = self.related_by_type.get(&rt) {
+                for i in 0..items.len() {
+                    rows.push(DisplayRow::Resource {
+                        resource_type: rt,
+                        index: i,
+                    });
+                }
+            }
+        }
+        rows
+    }
+
+    /// The resource map backing the current view (related vs live).
+    fn current_resources(&self) -> &HashMap<ResourceType, Vec<ResourceItem>> {
+        if self.view_mode == ViewMode::Related {
+            &self.related_by_type
+        } else {
+            &self.resources_by_type
+        }
+    }
+
+    /// Look up the [`ResourceItem`] for a [`DisplayRow::Resource`] cell in the
+    /// current view's dataset. Used by the renderer.
+    pub fn row_item(&self, resource_type: ResourceType, index: usize) -> Option<&ResourceItem> {
+        self.current_resources().get(&resource_type)?.get(index)
+    }
+
     /// Get the resource at the current table selection.
     pub fn selected_resource(&self) -> Option<(&ResourceItem, ResourceType)> {
         let idx = self.table_state.selected()?;
@@ -228,7 +294,7 @@ impl App {
                 resource_type,
                 index,
             } => {
-                let item = self.resources_by_type.get(resource_type)?.get(*index)?;
+                let item = self.current_resources().get(resource_type)?.get(*index)?;
                 Some((item, *resource_type))
             }
             DisplayRow::TypeDivider(_) => None,
@@ -561,8 +627,98 @@ impl App {
             ViewMode::Logs if self.entered_from_search => self.handle_search_logs_input(key),
             ViewMode::Logs => self.handle_logs_input(key),
             ViewMode::Confirm(_) => unreachable!(),
+            ViewMode::Related => self.handle_related_input(key),
             ViewMode::Search => self.handle_search_input(key),
         }
+    }
+
+    /// Handle input while the related-components view is open: navigate the
+    /// list, or Esc to return to the previous view.
+    fn handle_related_input(&mut self, key: KeyEvent) -> InputAction {
+        match key.code {
+            KeyCode::Char('q') | KeyCode::Esc => {
+                self.leave_related_view();
+                InputAction::None
+            }
+            KeyCode::Char('j') | KeyCode::Down => {
+                self.select_next();
+                InputAction::None
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                self.select_prev();
+                InputAction::None
+            }
+            _ => InputAction::None,
+        }
+    }
+
+    /// Restore the view that was active before the related-components view and
+    /// clear the related dataset.
+    fn leave_related_view(&mut self) {
+        self.view_mode = self.previous_view;
+        self.related_by_type.clear();
+        self.related_types.clear();
+        self.related_label_value.clear();
+        self.related_loading = false;
+        // Reset selection so a stale related-row index isn't reused by the
+        // restored view.
+        self.select_first_row();
+    }
+
+    /// Open the related-components view for the currently selected resource.
+    ///
+    /// Reads the configured label's value from the selection, captures its
+    /// namespace, and triggers the async fetch. If the resource carries no such
+    /// label there is nothing related to show, so an error popup is shown and
+    /// the view does not change.
+    fn open_related_view(&mut self) -> InputAction {
+        // Resolve the label value + namespace before mutating self (avoids
+        // overlapping the immutable borrow from `selected_resource`).
+        let info = self.selected_resource().and_then(|(res, _)| {
+            res.label(&self.related_label).map(|value| {
+                let ns = if res.namespace.is_empty() {
+                    String::new()
+                } else {
+                    res.namespace.clone()
+                };
+                (value, ns)
+            })
+        });
+        match info {
+            Some((value, ns)) => {
+                let ns = if ns.is_empty() {
+                    self.current_namespace().to_string()
+                } else {
+                    ns
+                };
+                self.previous_view = self.view_mode;
+                self.related_label_value = value;
+                self.related_namespace = ns;
+                self.related_by_type.clear();
+                self.related_types.clear();
+                self.related_loading = true;
+                self.view_mode = ViewMode::Related;
+                self.table_state.select(None);
+                InputAction::RelatedComponents
+            }
+            None => {
+                self.error_message = Some(format!(
+                    "Selected resource has no '{}' label — no related components.",
+                    self.related_label
+                ));
+                self.error_popup = true;
+                InputAction::None
+            }
+        }
+    }
+
+    /// Populate the related-components dataset from a completed fetch and select
+    /// the first row. Called by the main loop on `RelatedResourcesLoaded`.
+    pub fn set_related_resources(&mut self, results: Vec<(ResourceType, Vec<ResourceItem>)>) {
+        self.related_types = results.iter().map(|(rt, _)| *rt).collect();
+        self.related_by_type = results.into_iter().collect();
+        self.related_loading = false;
+        self.select_first_row();
     }
 
     fn handle_filter_input(&mut self, key: KeyEvent) -> InputAction {
@@ -678,7 +834,10 @@ impl App {
                 }
                 InputAction::None
             }
-            KeyCode::Char('r') => {
+            // Related components (objects sharing the configured label value).
+            KeyCode::Char('r') => self.open_related_view(),
+            // Restart is now 'R' (lower-case 'r' opens related components).
+            KeyCode::Char('R') => {
                 if let Some((_, rt)) = self.selected_resource() {
                     if rt.supports_restart() {
                         self.view_mode = ViewMode::Confirm(ConfirmAction::Restart);
@@ -821,7 +980,8 @@ impl App {
                 }
                 InputAction::None
             }
-            KeyCode::Char('r') => {
+            // Restart is now 'R' in the detail view too (see list view).
+            KeyCode::Char('R') => {
                 if rt.map(|t| t.supports_restart()).unwrap_or(false)
                     && self.selected_resource().is_some()
                 {
@@ -1103,6 +1263,7 @@ pub enum InputAction {
     StopLogs,
     Delete,
     Restart,
+    RelatedComponents,
     Edit,
     Exec,
     OpenLogsInEditor,

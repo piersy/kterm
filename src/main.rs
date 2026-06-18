@@ -1,4 +1,5 @@
 mod app;
+mod config;
 #[cfg(test)]
 mod app_test;
 mod event;
@@ -159,6 +160,7 @@ fn start_count_fetch(
 async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
     logging::init();
     let mut app = App::new();
+    app.related_label = config::Config::load().related_label;
     let mut events = EventHandler::new();
     let tx = events.sender();
 
@@ -545,6 +547,37 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                             }
                         });
                     }
+                    InputAction::RelatedComponents => {
+                        // The label key/value + namespace were captured into
+                        // app state when the related view was opened.
+                        let label_key = app.related_label.clone();
+                        let label_value = app.related_label_value.clone();
+                        let ns = app.related_namespace.clone();
+                        let mgr = k8s_manager.clone();
+                        let action_tx = tx.clone();
+
+                        tokio::spawn(async move {
+                            let guard = mgr.lock().await;
+                            if let Some(ref manager) = *guard {
+                                let client = manager.client.clone();
+                                drop(guard);
+                                let results = k8s::resources::list_related_resources(
+                                    client,
+                                    &ns,
+                                    &label_key,
+                                    &label_value,
+                                )
+                                .await;
+                                event::send_event(
+                                    &action_tx,
+                                    AppEvent::RelatedResourcesLoaded {
+                                        label_value,
+                                        results,
+                                    },
+                                );
+                            }
+                        });
+                    }
                     InputAction::OpenLogsInEditor => {
                         if !app.log_lines.is_empty() {
                             events.suspend();
@@ -919,6 +952,19 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                         }
                         _ => {}
                     }
+                }
+            }
+            AppEvent::RelatedResourcesLoaded {
+                label_value,
+                results,
+            } => {
+                // Apply only if the related view is still open and waiting for
+                // this exact request (the user may have left or re-triggered).
+                if app.view_mode == types::ViewMode::Related
+                    && app.related_loading
+                    && app.related_label_value == label_value
+                {
+                    app.set_related_resources(results);
                 }
             }
             AppEvent::NamespacesLoaded(namespaces) => {

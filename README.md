@@ -11,7 +11,7 @@ A terminal UI for browsing and managing Kubernetes resources. Navigate clusters,
 | > my-pod-0         | Running | 3d2h | 0        | node-a1          |
 |   my-pod-1         | Pending | 1h   | 0        | <none>           |
 +--------------------------------------------------------------------+
-| q:Quit Tab:Selector j/k:Nav Enter:Detail l:Logs d:Delete r:Restart|
+| q:Quit Tab:Selector j/k:Nav Enter:Detail l:Logs d:Delete R:Restart|
 +--------------------------------------------------------------------+
 ```
 
@@ -39,7 +39,8 @@ Fuzzy search (`Ctrl+F`) searches across all clusters, namespaces, and resource t
 - **Real-time updates** -- watches resources via the Kubernetes API; changes appear automatically
 - **Detail view** -- formatted description with conditions, containers, events, and full YAML
 - **Log streaming** -- tail pod logs with follow mode, scroll through history
-- **Actions** -- delete, restart (rollout restart for StatefulSets), edit YAML in `$EDITOR`, exec into a pod (no `kubectl` required -- runs over the existing kube client)
+- **Actions** -- delete, restart (`R`, rollout restart for StatefulSets), edit YAML in `$EDITOR`, exec into a pod (no `kubectl` required -- runs over the existing kube client)
+- **Related components** -- press `r` to pull up every object sharing the selected resource's `app.kubernetes.io/instance` label (deployments, pods, services, config maps...) in one grouped view; the label is configurable
 - **Fuzzy search** -- `Ctrl+F` to search across all clusters, namespaces, and resource types at once; results show name, type, namespace, and cluster side by side
 - **Filtering** -- search resources by name with `/`
 - **Color-coded status** -- green for Running/Bound, yellow for Pending, red for Failed/CrashLoopBackOff
@@ -120,11 +121,20 @@ The app reads your kubeconfig and connects to the current context. If no cluster
 | `Enter` | Open detail view |
 | `l` | View logs (Pods only) |
 | `d` | Delete (with confirmation) |
-| `r` | Restart (with confirmation) |
+| `r` | Related components (objects sharing the configured label) |
+| `R` | Restart (with confirmation) |
 | `e` | Edit YAML in `$EDITOR` |
 | `x` | Exec into pod (interactive shell over the kube client) |
 | `/` | Filter by name |
 | `Ctrl+f` | Fuzzy search all clusters |
+
+### Related components view
+
+| Key | Action |
+|-----|--------|
+| `j` / `Down` | Move selection down |
+| `k` / `Up` | Move selection up |
+| `Esc` / `q` | Back to the previous view |
 
 ### Fuzzy search view
 
@@ -146,7 +156,7 @@ The app reads your kubeconfig and connects to the current context. If no cluster
 | `g` / `G` | Jump to top/bottom |
 | `l` | View logs |
 | `d` | Delete |
-| `r` | Restart |
+| `R` | Restart |
 | `e` | Edit |
 | `x` | Exec into pod |
 
@@ -158,6 +168,22 @@ The app reads your kubeconfig and connects to the current context. If no cluster
 | `f` | Toggle follow mode |
 | `j` / `k` | Scroll up/down |
 | `g` / `G` | Jump to top/bottom |
+
+## Configuration
+
+kterm reads an optional YAML config file from
+`$XDG_CONFIG_HOME/kterm/config.yaml` (falling back to
+`~/.config/kterm/config.yaml`). A missing or invalid file is ignored and
+defaults are used.
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `related_label` | `app.kubernetes.io/instance` | Label whose value groups "related components" (the `r` key) |
+
+```yaml
+# ~/.config/kterm/config.yaml
+related_label: app.kubernetes.io/instance
+```
 
 ## Architecture
 

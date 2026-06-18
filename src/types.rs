@@ -305,6 +305,9 @@ pub enum ViewMode {
     Detail,
     Logs,
     Confirm(ConfirmAction),
+    /// Showing the components related to a selected resource (objects sharing
+    /// the configured label value), laid out like the multi-type view.
+    Related,
     Search,
 }
 
@@ -405,6 +408,20 @@ impl ResourceItem {
     /// time) so the UI refreshes the AGE column live on each render tick.
     pub fn age(&self) -> String {
         format_age_secs(self.created_at)
+    }
+
+    /// Reads `metadata.labels[key]` from the raw YAML, if present.
+    ///
+    /// Used to group "related components" by a shared label value. Returns
+    /// `None` when the label is absent or the YAML cannot be parsed.
+    pub fn label(&self, key: &str) -> Option<String> {
+        let value: serde_yaml::Value = serde_yaml::from_str(&self.raw_yaml).ok()?;
+        value
+            .get("metadata")?
+            .get("labels")?
+            .get(key)?
+            .as_str()
+            .map(|s| s.to_string())
     }
 
     /// Returns column values driven by an arbitrary slice of [`ColumnDef`]s.

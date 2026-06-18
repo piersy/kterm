@@ -15,8 +15,9 @@ fn resource_list_bindings(app: &App) -> String {
     }
     parts.push("d:Delete");
     if rt.map(|t| t.supports_restart()).unwrap_or(app.primary_resource_type().supports_restart()) {
-        parts.push("r:Restart");
+        parts.push("R:Restart");
     }
+    parts.push("r:Related");
     parts.push("e:Edit");
     if rt.map(|t| t.supports_exec()).unwrap_or(app.primary_resource_type().supports_exec()) {
         parts.push("x:Exec");
@@ -34,7 +35,7 @@ fn detail_bindings(app: &App) -> String {
     }
     parts.push("d:Delete");
     if rt.map(|t| t.supports_restart()).unwrap_or(false) {
-        parts.push("r:Restart");
+        parts.push("R:Restart");
     }
     if rt.map(|t| t.supports_exec()).unwrap_or(false) {
         parts.push("x:Exec");
@@ -80,6 +81,7 @@ pub fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
         }
         ViewMode::Logs => "Esc:Back  f:Follow  j/k:Scroll  g/G:Top/Bottom  o:Vim  O:Less",
         ViewMode::Confirm(_) => "y:Confirm  Any other key:Cancel",
+        ViewMode::Related => "Esc:Back  j/k:Nav  (related components)",
         ViewMode::Search => "Esc:Back  Down/Up:Nav  Enter:Detail  Type to search...",
     };
 

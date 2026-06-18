@@ -658,4 +658,54 @@ mod tests {
             output
         );
     }
+
+    // --- Related components (#26) ---
+
+    fn fake_labelled(kind: &str, name: &str, instance: &str) -> ResourceItem {
+        ResourceItem {
+            name: name.to_string(),
+            namespace: "default".to_string(),
+            status: "Running".to_string(),
+            created_at: None,
+            extra: vec![],
+            raw_yaml: format!(
+                "apiVersion: v1\nkind: {}\nmetadata:\n  name: {}\n  labels:\n    app.kubernetes.io/instance: {}\n",
+                kind, name, instance
+            ),
+        }
+    }
+
+    #[test]
+    fn test_related_view_renders_title_and_resources() {
+        let mut app = App::new();
+        app.previous_view = ViewMode::List;
+        app.view_mode = ViewMode::Related;
+        app.related_label = "app.kubernetes.io/instance".to_string();
+        app.related_label_value = "my-app".to_string();
+        app.related_namespace = "default".to_string();
+        app.related_loading = true;
+        app.set_related_resources(vec![
+            (ResourceType::Pods, vec![fake_labelled("Pod", "web-0", "my-app")]),
+            (ResourceType::Services, vec![fake_labelled("Service", "web", "my-app")]),
+        ]);
+
+        let output = render_to_string(&mut app, 120, 24);
+        assert!(output.contains("Related"), "title, got:\n{}", output);
+        assert!(output.contains("my-app"), "label value, got:\n{}", output);
+        assert!(output.contains("web-0"), "related pod, got:\n{}", output);
+        // Type dividers label the grouped types.
+        assert!(output.contains("pods"), "pods divider, got:\n{}", output);
+        // Related footer.
+        assert!(output.contains("Esc:Back"), "footer, got:\n{}", output);
+    }
+
+    #[test]
+    fn test_list_footer_shows_remapped_restart_and_related() {
+        // Pods support restart, so the gated R:Restart hint appears; r:Related
+        // is always offered in the list view.
+        let mut app = app_with_pods();
+        let output = render_to_string(&mut app, 200, 24);
+        assert!(output.contains("R:Restart"), "remapped restart, got:\n{}", output);
+        assert!(output.contains("r:Related"), "related hint, got:\n{}", output);
+    }
 }

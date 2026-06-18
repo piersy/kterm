@@ -66,6 +66,10 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         ViewMode::List => {
             resource_list::render(frame, app, content_area);
         }
+        ViewMode::Related => {
+            // Full-width multi-type layout backed by the related dataset.
+            resource_list::render(frame, app, content_area);
+        }
         ViewMode::Detail | ViewMode::Confirm(_) => {
             let split = Layout::default()
                 .direction(Direction::Horizontal)
