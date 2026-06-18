@@ -40,6 +40,9 @@ pub struct App {
     pub filter: String,
     pub filter_active: bool,
 
+    // Scale popup: buffer for the replica count being typed
+    pub scale_input: String,
+
     // Error popup (modal, dismissed with any key)
     pub error_message: Option<String>,
     pub error_popup: bool,
@@ -134,6 +137,8 @@ impl App {
 
             filter: String::new(),
             filter_active: false,
+
+            scale_input: String::new(),
 
             error_message: None,
             error_popup: false,
@@ -561,6 +566,7 @@ impl App {
             ViewMode::Logs if self.entered_from_search => self.handle_search_logs_input(key),
             ViewMode::Logs => self.handle_logs_input(key),
             ViewMode::Confirm(_) => unreachable!(),
+            ViewMode::Scale => self.handle_scale_input(key),
             ViewMode::Search => self.handle_search_input(key),
         }
     }
@@ -614,6 +620,42 @@ impl App {
                 self.view_mode = ViewMode::List;
                 InputAction::None
             }
+        }
+    }
+
+    /// Handles input while the scale popup is open.
+    ///
+    /// Accepts digits (building up the replica count), Backspace to edit,
+    /// Enter to apply, and Esc to cancel. Invalid or empty input on Enter
+    /// keeps the popup open rather than applying a bad value.
+    fn handle_scale_input(&mut self, key: KeyEvent) -> InputAction {
+        match key.code {
+            KeyCode::Esc => {
+                self.view_mode = ViewMode::List;
+                self.scale_input.clear();
+                InputAction::None
+            }
+            KeyCode::Enter => match self.scale_input.trim().parse::<i32>() {
+                Ok(replicas) if replicas >= 0 => {
+                    self.view_mode = ViewMode::List;
+                    self.scale_input.clear();
+                    InputAction::Scale(replicas)
+                }
+                // Keep the popup open on empty or invalid input.
+                _ => InputAction::None,
+            },
+            KeyCode::Backspace => {
+                self.scale_input.pop();
+                InputAction::None
+            }
+            KeyCode::Char(c) if c.is_ascii_digit() => {
+                // Cap the length to keep the value sane (max 999999 replicas).
+                if self.scale_input.len() < 6 {
+                    self.scale_input.push(c);
+                }
+                InputAction::None
+            }
+            _ => InputAction::None,
         }
     }
 
@@ -683,6 +725,22 @@ impl App {
                     if rt.supports_restart() {
                         self.view_mode = ViewMode::Confirm(ConfirmAction::Restart);
                     }
+                }
+                InputAction::None
+            }
+            KeyCode::Char('s') => {
+                // Compute the pre-filled value before mutating self to avoid
+                // overlapping the immutable borrow from `selected_resource`.
+                let prefill = self.selected_resource().and_then(|(res, rt)| {
+                    if rt.supports_scale() {
+                        Some(res.replicas().map(|r| r.to_string()).unwrap_or_default())
+                    } else {
+                        None
+                    }
+                });
+                if let Some(prefill) = prefill {
+                    self.scale_input = prefill;
+                    self.view_mode = ViewMode::Scale;
                 }
                 InputAction::None
             }
@@ -1103,6 +1161,7 @@ pub enum InputAction {
     StopLogs,
     Delete,
     Restart,
+    Scale(i32),
     Edit,
     Exec,
     OpenLogsInEditor,

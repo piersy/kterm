@@ -66,6 +66,10 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         ViewMode::List => {
             resource_list::render(frame, app, content_area);
         }
+        ViewMode::Scale => {
+            resource_list::render(frame, app, content_area);
+            help::render_scale_dialog(frame, app);
+        }
         ViewMode::Detail | ViewMode::Confirm(_) => {
             let split = Layout::default()
                 .direction(Direction::Horizontal)

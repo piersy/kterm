@@ -134,6 +134,35 @@ pub async fn restart_resource(
     Ok(())
 }
 
+/// Sets the replica count on a scalable workload.
+///
+/// Supports Deployments, StatefulSets, and ReplicaSets. DaemonSets are not
+/// scalable in Kubernetes (one pod per node, no `spec.replicas`), so they are
+/// rejected here.
+pub async fn scale_resource(
+    client: Client,
+    namespace: &str,
+    name: &str,
+    resource_type: ResourceType,
+    replicas: i32,
+) -> Result<()> {
+    match resource_type {
+        ResourceType::Deployments => {
+            scale::<Deployment>(client, namespace, name, replicas, "Deployment").await?;
+        }
+        ResourceType::StatefulSets => {
+            scale::<StatefulSet>(client, namespace, name, replicas, "StatefulSet").await?;
+        }
+        ResourceType::ReplicaSets => {
+            scale::<ReplicaSet>(client, namespace, name, replicas, "ReplicaSet").await?;
+        }
+        _ => {
+            anyhow::bail!("{} resources cannot be scaled", resource_type);
+        }
+    }
+    Ok(())
+}
+
 pub async fn apply_yaml(
     client: Client,
     namespace: &str,
@@ -314,6 +343,35 @@ where
     api.patch(name, &PatchParams::default(), &Patch::Merge(&patch))
         .await
         .context(format!("Failed to restart {}", label))?;
+    Ok(())
+}
+
+async fn scale<T>(
+    client: Client,
+    namespace: &str,
+    name: &str,
+    replicas: i32,
+    label: &str,
+) -> Result<()>
+where
+    T: kube::Resource<DynamicType = (), Scope = kube::core::NamespaceResourceScope>
+        + Clone
+        + DeserializeOwned
+        + Serialize
+        + std::fmt::Debug
+        + Send
+        + Sync
+        + 'static,
+{
+    let api: Api<T> = Api::namespaced(client, namespace);
+    let patch = json!({
+        "spec": {
+            "replicas": replicas
+        }
+    });
+    api.patch(name, &PatchParams::default(), &Patch::Merge(&patch))
+        .await
+        .context(format!("Failed to scale {}", label))?;
     Ok(())
 }
 
