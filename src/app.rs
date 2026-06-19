@@ -58,6 +58,11 @@ pub struct App {
     /// open so a late result from a superseded request (e.g. a different
     /// namespace with a colliding label value) is discarded.
     pub related_request: u64,
+    /// True while inside the related-components "session" — the related list
+    /// or any sub-view (Detail/Logs/Confirm/Scale) drilled into from it. Keeps
+    /// the data accessors resolving the related dataset and routes sub-view Esc
+    /// back to the related list.
+    pub entered_from_related: bool,
     /// View to restore when leaving the related view with Esc.
     pub previous_view: ViewMode,
 
@@ -170,6 +175,7 @@ impl App {
             related_types: Vec::new(),
             related_loading: false,
             related_request: 0,
+            entered_from_related: false,
             previous_view: ViewMode::List,
 
             filter: String::new(),
@@ -240,7 +246,7 @@ impl App {
     /// related resources (always with type dividers, no name filter); otherwise
     /// it flattens the live watched resources for the selected types.
     pub fn display_rows(&self) -> Vec<DisplayRow> {
-    if self.view_mode == ViewMode::Related {
+    if self.in_related_context() {
         return self.related_display_rows();
     }
 
@@ -288,9 +294,26 @@ impl App {
     rows
 }
 
+    /// True when showing the related list or any sub-view drilled into from it.
+    /// The data accessors and renderer resolve the related dataset while this
+    /// holds, so actions operate on the highlighted related component.
+    pub fn in_related_context(&self) -> bool {
+        self.view_mode == ViewMode::Related || self.entered_from_related
+    }
+
+    /// The view to return to after a Detail/Logs/Confirm/Scale sub-view: the
+    /// related list if we drilled in from it, otherwise the normal list.
+    fn action_return_view(&self) -> ViewMode {
+        if self.entered_from_related {
+            ViewMode::Related
+        } else {
+            ViewMode::List
+        }
+    }
+
     /// The resource map backing the current view (related vs live).
     fn current_resources(&self) -> &HashMap<ResourceType, Vec<ResourceItem>> {
-    if self.view_mode == ViewMode::Related {
+    if self.in_related_context() {
         &self.related_by_type
     } else {
         &self.resources_by_type
@@ -653,27 +676,113 @@ impl App {
 
     /// Handle input while the related-components view is open: navigate the
     /// list, or Esc to return to the previous view.
+    /// Handle input in the related-components list. Navigation + Esc are handled
+    /// here; every per-resource action key (Enter, l, d, R, s, e, x) is shared
+    /// with the normal list via [`handle_resource_action_key`] so related
+    /// components are fully interactive. `r` is intentionally absent — we are
+    /// already viewing related components.
     fn handle_related_input(&mut self, key: KeyEvent) -> InputAction {
-    match key.code {
-        KeyCode::Char('q') | KeyCode::Esc => {
-            self.leave_related_view();
-            InputAction::None
+        match key.code {
+            KeyCode::Char('q') | KeyCode::Esc => {
+                self.leave_related_view();
+                return InputAction::None;
+            }
+            KeyCode::Char('j') | KeyCode::Down => {
+                self.select_next();
+                return InputAction::None;
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                self.select_prev();
+                return InputAction::None;
+            }
+            _ => {}
         }
-        KeyCode::Char('j') | KeyCode::Down => {
-            self.select_next();
-            InputAction::None
-        }
-        KeyCode::Char('k') | KeyCode::Up => {
-            self.select_prev();
-            InputAction::None
-        }
-        _ => InputAction::None,
+        self.handle_resource_action_key(key)
+            .unwrap_or(InputAction::None)
     }
-}
+
+    /// Per-resource action keys shared by the normal list and the related view.
+    /// Returns `Some(action)` when `key` is one of these actions, `None` so the
+    /// caller can handle its view-specific keys. All transitions go through the
+    /// view-aware `selected_resource`, so they operate on the highlighted row of
+    /// whichever dataset (live or related) is in context.
+    fn handle_resource_action_key(&mut self, key: KeyEvent) -> Option<InputAction> {
+        match key.code {
+            KeyCode::Enter => {
+                if self.selected_resource().is_some() {
+                    self.view_mode = ViewMode::Detail;
+                    self.detail_scroll = 0;
+                    Some(InputAction::Describe)
+                } else {
+                    Some(InputAction::None)
+                }
+            }
+            KeyCode::Char('l') => {
+                if let Some((_, rt)) = self.selected_resource() {
+                    if rt.supports_logs() {
+                        self.view_mode = ViewMode::Logs;
+                        self.log_lines.clear();
+                        self.log_scroll = 0;
+                        self.log_follow = true;
+                        return Some(InputAction::StreamLogs);
+                    }
+                }
+                Some(InputAction::None)
+            }
+            KeyCode::Char('d') => {
+                if self.selected_resource().is_some() {
+                    self.view_mode = ViewMode::Confirm(ConfirmAction::Delete);
+                }
+                Some(InputAction::None)
+            }
+            // Restart is 'R' (lower-case 'r' opens related components).
+            KeyCode::Char('R') => {
+                if let Some((_, rt)) = self.selected_resource() {
+                    if rt.supports_restart() {
+                        self.view_mode = ViewMode::Confirm(ConfirmAction::Restart);
+                    }
+                }
+                Some(InputAction::None)
+            }
+            KeyCode::Char('s') => {
+                // Resolve scalability and the current replica count before
+                // mutating self to avoid overlapping the immutable borrow from
+                // `selected_resource`. The outer `Option` distinguishes "not
+                // scalable" (don't open) from "scalable but replicas unknown".
+                let current = self.selected_resource().and_then(|(res, rt)| {
+                    rt.supports_scale()
+                        .then(|| res.replicas().and_then(|r| i32::try_from(r).ok()))
+                });
+                if let Some(current) = current {
+                    self.scale_current = current;
+                    self.scale_input = current.map(|r| r.to_string()).unwrap_or_default();
+                    self.view_mode = ViewMode::Scale;
+                }
+                Some(InputAction::None)
+            }
+            KeyCode::Char('e') => {
+                if self.selected_resource().is_some() {
+                    Some(InputAction::Edit)
+                } else {
+                    Some(InputAction::None)
+                }
+            }
+            KeyCode::Char('x') => {
+                if let Some((_, rt)) = self.selected_resource() {
+                    if rt.supports_exec() {
+                        return Some(InputAction::Exec);
+                    }
+                }
+                Some(InputAction::None)
+            }
+            _ => None,
+        }
+    }
 
     /// Restore the view that was active before the related-components view and
     /// clear the related dataset.
     fn leave_related_view(&mut self) {
+    self.entered_from_related = false;
     self.view_mode = self.previous_view;
     self.related_by_type.clear();
     self.related_types.clear();
@@ -716,6 +825,7 @@ impl App {
             self.related_by_type.clear();
             self.related_types.clear();
             self.related_loading = true;
+            self.entered_from_related = true;
             // New request: supersedes any in-flight fetch.
             self.related_request = self.related_request.wrapping_add(1);
             self.view_mode = ViewMode::Related;
@@ -802,14 +912,14 @@ impl App {
     fn handle_confirm_input(&mut self, key: KeyEvent, action: ConfirmAction) -> InputAction {
         match key.code {
             KeyCode::Char('y') | KeyCode::Char('Y') => {
-                self.view_mode = ViewMode::List;
+                self.view_mode = self.action_return_view();
                 match action {
                     ConfirmAction::Delete => InputAction::Delete,
                     ConfirmAction::Restart => InputAction::Restart,
                 }
             }
             _ => {
-                self.view_mode = ViewMode::List;
+                self.view_mode = self.action_return_view();
                 InputAction::None
             }
         }
@@ -823,13 +933,13 @@ impl App {
     fn handle_scale_input(&mut self, key: KeyEvent) -> InputAction {
     match key.code {
         KeyCode::Esc => {
-            self.view_mode = ViewMode::List;
+            self.view_mode = self.action_return_view();
             self.scale_input.clear();
             InputAction::None
         }
         KeyCode::Enter => match self.scale_input.trim().parse::<i32>() {
             Ok(replicas) if replicas >= 0 => {
-                self.view_mode = ViewMode::List;
+                self.view_mode = self.action_return_view();
                 self.scale_input.clear();
                 InputAction::Scale(replicas)
             }
@@ -859,118 +969,55 @@ impl App {
     }
 
     fn handle_resource_list_input(&mut self, key: KeyEvent) -> InputAction {
+        // List-specific keys first; per-resource action keys (Enter/l/d/R/s/e/x)
+        // are delegated to the shared handler below.
         match key.code {
             KeyCode::Char('q') => {
                 self.should_quit = true;
-                InputAction::None
+                return InputAction::None;
             }
             KeyCode::Char('j') | KeyCode::Down => {
                 self.select_next();
-                InputAction::None
+                return InputAction::None;
             }
             KeyCode::Char('k') | KeyCode::Up => {
                 self.select_prev();
-                InputAction::None
+                return InputAction::None;
             }
             // C/N/T to open selectors
             KeyCode::Char('c') => {
                 self.open_selector(SelectorTarget::Context);
-                InputAction::None
+                return InputAction::None;
             }
             KeyCode::Char('n') => {
                 self.open_selector(SelectorTarget::Namespace);
-                InputAction::None
+                return InputAction::None;
             }
             KeyCode::Char('t') => {
                 self.open_selector(SelectorTarget::ResourceType);
-                InputAction::None
-            }
-            KeyCode::Enter => {
-                if self.selected_resource().is_some() {
-                    self.view_mode = ViewMode::Detail;
-                    self.detail_scroll = 0;
-                    InputAction::Describe
-                } else {
-                    InputAction::None
-                }
-            }
-            KeyCode::Char('l') => {
-                if let Some((_, rt)) = self.selected_resource() {
-                    if rt.supports_logs() {
-                        self.view_mode = ViewMode::Logs;
-                        self.log_lines.clear();
-                        self.log_scroll = 0;
-                        self.log_follow = true;
-                        return InputAction::StreamLogs;
-                    }
-                }
-                InputAction::None
-            }
-            KeyCode::Char('d') => {
-                if self.selected_resource().is_some() {
-                    self.view_mode = ViewMode::Confirm(ConfirmAction::Delete);
-                }
-                InputAction::None
+                return InputAction::None;
             }
             // Related components (objects sharing the configured label value).
-            KeyCode::Char('r') => self.open_related_view(),
-            // Restart is now 'R' (lower-case 'r' opens related components).
-            KeyCode::Char('R') => {
-                if let Some((_, rt)) = self.selected_resource() {
-                    if rt.supports_restart() {
-                        self.view_mode = ViewMode::Confirm(ConfirmAction::Restart);
-                    }
-                }
-                InputAction::None
-            }
-            KeyCode::Char('s') => {
-                // Resolve scalability and the current replica count before
-                // mutating self to avoid overlapping the immutable borrow from
-                // `selected_resource`. The outer `Option` distinguishes "not
-                // scalable" (don't open) from "scalable but replicas unknown".
-                let current = self.selected_resource().and_then(|(res, rt)| {
-                    rt.supports_scale()
-                        .then(|| res.replicas().and_then(|r| i32::try_from(r).ok()))
-                });
-                if let Some(current) = current {
-                    self.scale_current = current;
-                    self.scale_input = current.map(|r| r.to_string()).unwrap_or_default();
-                    self.view_mode = ViewMode::Scale;
-                }
-                InputAction::None
-            }
-            KeyCode::Char('e') => {
-                if self.selected_resource().is_some() {
-                    InputAction::Edit
-                } else {
-                    InputAction::None
-                }
-            }
-            KeyCode::Char('x') => {
-                if let Some((_, rt)) = self.selected_resource() {
-                    if rt.supports_exec() {
-                        return InputAction::Exec;
-                    }
-                }
-                InputAction::None
-            }
+            KeyCode::Char('r') => return self.open_related_view(),
             KeyCode::Char('/') => {
                 self.filter_active = true;
                 // Keep existing filter text so user can continue editing
-                InputAction::None
+                return InputAction::None;
             }
             KeyCode::Esc => {
                 if !self.filter.is_empty() {
                     self.filter.clear();
                     self.select_first_row();
                 }
-                InputAction::None
+                return InputAction::None;
             }
             KeyCode::Char('?') => {
-                InputAction::None
+                return InputAction::None;
             }
-            _ => InputAction::None,
+            _ => {}
         }
+        self.handle_resource_action_key(key)
+            .unwrap_or(InputAction::None)
     }
 
     fn handle_selector_input(&mut self, key: KeyEvent) -> InputAction {
@@ -1035,7 +1082,7 @@ impl App {
         let rt = self.selected_row_resource_type();
         match key.code {
             KeyCode::Char('q') | KeyCode::Esc => {
-                self.view_mode = ViewMode::List;
+                self.view_mode = self.action_return_view();
                 InputAction::None
             }
             KeyCode::Char('j') | KeyCode::Down => {
@@ -1106,7 +1153,7 @@ impl App {
     fn handle_logs_input(&mut self, key: KeyEvent) -> InputAction {
         match key.code {
             KeyCode::Char('q') | KeyCode::Esc => {
-                self.view_mode = ViewMode::List;
+                self.view_mode = self.action_return_view();
                 InputAction::StopLogs
             }
             KeyCode::Char('f') => {

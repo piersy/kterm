@@ -728,6 +728,49 @@ mod tests {
         assert!(output.contains("default"), "namespace in title, got:\n{}", output);
     }
 
+    #[test]
+    fn test_related_footer_advertises_interactive_actions() {
+        let mut app = App::new();
+        app.previous_view = ViewMode::List;
+        app.view_mode = ViewMode::Related;
+        app.entered_from_related = true;
+        app.related_label_value = "my-app".to_string();
+        app.related_namespace = "default".to_string();
+        app.set_related_resources(vec![(
+            ResourceType::Pods,
+            vec![fake_labelled("Pod", "web-0", "my-app")],
+        )]);
+
+        let output = render_to_string(&mut app, 160, 24);
+        // A pod is selected: Detail/Logs/Delete/Restart/Edit/Exec are offered.
+        for hint in ["Esc:Back", "Enter:Detail", "l:Logs", "d:Delete", "R:Restart", "e:Edit", "x:Exec"] {
+            assert!(output.contains(hint), "footer missing {}, got:\n{}", hint, output);
+        }
+        // `r` is intentionally not offered inside the related view.
+        assert!(!output.contains("r:Related"), "should not offer r in related view, got:\n{}", output);
+    }
+
+    #[test]
+    fn test_related_detail_renders_related_list_pane() {
+        // Drilled into Detail from the related view: the left list pane is
+        // backed by the related dataset (not the live watch).
+        let mut app = App::new();
+        app.previous_view = ViewMode::List;
+        app.entered_from_related = true;
+        app.view_mode = ViewMode::Detail; // drilled in from related
+        app.related_label_value = "my-app".to_string();
+        app.related_namespace = "default".to_string();
+        app.set_related_resources(vec![(
+            ResourceType::Pods,
+            vec![fake_labelled("Pod", "web-0", "my-app")],
+        )]);
+        app.detail_text = "kind: Pod\nname: web-0".to_string();
+
+        // Renders without panic and shows the related component in the list pane.
+        let output = render_to_string(&mut app, 120, 24);
+        assert!(output.contains("web-0"), "related pod in detail pane, got:\n{}", output);
+    }
+
     // --- Scale (#25) ---
 
     fn app_with_deployment() -> App {

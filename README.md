@@ -131,11 +131,22 @@ The app reads your kubeconfig and connects to the current context. If no cluster
 
 ### Related components view
 
+The related components are fully interactive -- every per-resource action from
+the normal list works here too, operating on the highlighted component. Only
+`r` is absent (you are already viewing related components).
+
 | Key | Action |
 |-----|--------|
 | `j` / `Down` | Move selection down |
 | `k` / `Up` | Move selection up |
-| `Esc` / `q` | Back to the previous view |
+| `Enter` | Detail view |
+| `l` | Logs (Pods) |
+| `d` | Delete (with confirmation) |
+| `R` | Restart (with confirmation) |
+| `s` | Scale (Deployments/StatefulSets/ReplicaSets) |
+| `e` | Edit YAML in `$EDITOR` |
+| `x` | Exec into pod |
+| `Esc` / `q` | Back (sub-view → related list → previous view) |
 
 ### Fuzzy search view
 

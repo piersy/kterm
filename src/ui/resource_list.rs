@@ -8,10 +8,10 @@ use crate::types::{is_all_namespaces, ColumnDef};
 
 pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
     let display_rows = app.display_rows();
-    // The related-components view always uses the multi-type layout so its
-    // results are grouped under per-type dividers.
-    let multi_type =
-        app.view_mode == crate::types::ViewMode::Related || app.selected_resource_types.len() > 1;
+    // The related-components view (and any sub-view drilled into from it) always
+    // uses the multi-type layout so its results are grouped under per-type
+    // dividers and backed by the related dataset.
+    let multi_type = app.in_related_context() || app.selected_resource_types.len() > 1;
 
     if !multi_type {
         // Single type: use original table rendering
@@ -105,7 +105,7 @@ fn render_single_type(frame: &mut Frame, app: &mut App, area: Rect) {
 fn render_multi_type(frame: &mut Frame, app: &mut App, area: Rect, display_rows: &[DisplayRow]) {
     // For multi-type display, we use a single table with variable-width columns.
     // Divider rows span the full width. Resource rows use a generic column layout.
-    let related = app.view_mode == crate::types::ViewMode::Related;
+    let related = app.in_related_context();
     let all_ns = if related {
         is_all_namespaces(&app.related_namespace)
     } else {
