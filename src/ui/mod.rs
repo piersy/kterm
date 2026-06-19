@@ -66,22 +66,26 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         ViewMode::List => {
             resource_list::render(frame, app, content_area);
         }
+        ViewMode::Related => {
+            // Full-width multi-type layout backed by the related dataset.
+            resource_list::render(frame, app, content_area);
+        }
         ViewMode::Scale => {
             resource_list::render(frame, app, content_area);
             help::render_scale_dialog(frame, app);
         }
         ViewMode::Detail | ViewMode::Confirm(_) => {
-            let split = Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints([Constraint::Percentage(35), Constraint::Percentage(65)])
-                .split(content_area);
-            resource_list::render(frame, app, split[0]);
-            detail::render(frame, app, split[1]);
+        let split = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(35), Constraint::Percentage(65)])
+            .split(content_area);
+        resource_list::render(frame, app, split[0]);
+        detail::render(frame, app, split[1]);
 
-            if let ViewMode::Confirm(action) = app.view_mode {
-                help::render_confirm_dialog(frame, action);
-            }
+        if let ViewMode::Confirm(action) = app.view_mode {
+            help::render_confirm_dialog(frame, action);
         }
+    }
         ViewMode::Logs => {
             let split = Layout::default()
                 .direction(Direction::Horizontal)

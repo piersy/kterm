@@ -8,7 +8,10 @@ use crate::types::{is_all_namespaces, ColumnDef};
 
 pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
     let display_rows = app.display_rows();
-    let multi_type = app.selected_resource_types.len() > 1;
+    // The related-components view (and any sub-view drilled into from it) always
+    // uses the multi-type layout so its results are grouped under per-type
+    // dividers and backed by the related dataset.
+    let multi_type = app.in_related_context() || app.selected_resource_types.len() > 1;
 
     if !multi_type {
         // Single type: use original table rendering
@@ -102,7 +105,12 @@ fn render_single_type(frame: &mut Frame, app: &mut App, area: Rect) {
 fn render_multi_type(frame: &mut Frame, app: &mut App, area: Rect, display_rows: &[DisplayRow]) {
     // For multi-type display, we use a single table with variable-width columns.
     // Divider rows span the full width. Resource rows use a generic column layout.
-    let all_ns = is_all_namespaces(app.current_namespace());
+    let related = app.in_related_context();
+    let all_ns = if related {
+        is_all_namespaces(&app.related_namespace)
+    } else {
+        is_all_namespaces(app.current_namespace())
+    };
     let defs = multi_type_column_defs(all_ns);
 
     let header_cells: Vec<Cell> = defs
@@ -142,8 +150,7 @@ fn render_multi_type(frame: &mut Frame, app: &mut App, area: Rect, display_rows:
                 resource_type,
                 index,
             } => {
-                let items = app.resources_by_type.get(resource_type);
-                if let Some(item) = items.and_then(|v| v.get(*index)) {
+                if let Some(item) = app.row_item(*resource_type, *index) {
                     let mut cells = vec![
                         Cell::from(resource_type.to_string())
                             .style(Style::default().fg(Color::DarkGray)),
@@ -166,16 +173,35 @@ fn render_multi_type(frame: &mut Frame, app: &mut App, area: Rect, display_rows:
 
     let widths = ColumnDef::to_constraints(&defs);
 
-    let types_display: String = app
-        .selected_resource_types
-        .iter()
-        .map(|t| t.to_string())
-        .collect::<Vec<_>>()
-        .join(", ");
-    let title = if app.filter.is_empty() {
-        format!(" {} ", types_display)
+    let title = if related {
+        let status = if app.related_loading {
+            " — loading…"
+        } else if display_rows.is_empty() {
+            " — none found"
+        } else {
+            ""
+        };
+        let ns = if is_all_namespaces(&app.related_namespace) {
+            "all namespaces".to_string()
+        } else {
+            app.related_namespace.clone()
+        };
+        format!(
+            " Related: {}={} in {}{} ",
+            app.related_label, app.related_label_value, ns, status
+        )
     } else {
-        format!(" {} [filter: {}] ", types_display, app.filter)
+        let types_display: String = app
+            .selected_resource_types
+            .iter()
+            .map(|t| t.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        if app.filter.is_empty() {
+            format!(" {} ", types_display)
+        } else {
+            format!(" {} [filter: {}] ", types_display, app.filter)
+        }
     };
 
     let highlight_style = Style::default()

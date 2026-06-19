@@ -1,4 +1,5 @@
 mod app;
+mod config;
 #[cfg(test)]
 mod app_test;
 mod event;
@@ -159,6 +160,7 @@ fn start_count_fetch(
 async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
     logging::init();
     let mut app = App::new();
+    app.related_label = config::Config::load().related_label;
     let mut events = EventHandler::new();
     let tx = events.sender();
 
@@ -545,6 +547,35 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                             }
                         });
                     }
+                    InputAction::RelatedComponents => {
+                        // The label key/value + namespace + request id were
+                        // captured into app state when the view was opened.
+                        let label_key = app.related_label.clone();
+                        let label_value = app.related_label_value.clone();
+                        let ns = app.related_namespace.clone();
+                        let request = app.related_request;
+                        let mgr = k8s_manager.clone();
+                        let action_tx = tx.clone();
+
+                        tokio::spawn(async move {
+                            let guard = mgr.lock().await;
+                            if let Some(ref manager) = *guard {
+                                let client = manager.client.clone();
+                                drop(guard);
+                                let results = k8s::resources::list_related_resources(
+                                    client,
+                                    &ns,
+                                    &label_key,
+                                    &label_value,
+                                )
+                                .await;
+                                event::send_event(
+                                    &action_tx,
+                                    AppEvent::RelatedResourcesLoaded { request, results },
+                                );
+                            }
+                        });
+                    }
                     InputAction::Scale(replicas) => {
                         let (name, ns, rt) = {
                             if let Some((res, rt)) = app.selected_resource() {
@@ -583,20 +614,20 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                         });
                     }
                     InputAction::OpenLogsInEditor => {
-                        if !app.log_lines.is_empty() {
-                            events.suspend();
-                            disable_raw_mode()?;
+                    if !app.log_lines.is_empty() {
+                        events.suspend();
+                        disable_raw_mode()?;
 
-                            let _ = open_logs_in_editor(&app.log_lines);
+                        let _ = open_logs_in_editor(&app.log_lines);
 
-                            // Editor's LeaveAlternateScreen put us on the main screen;
-                            // re-enter alternate screen so kterm draws there, not on scrollback.
-                            execute!(terminal.backend_mut(), EnterAlternateScreen)?;
-                            enable_raw_mode()?;
-                            terminal.clear()?;
-                            events.resume();
-                        }
+                        // Editor's LeaveAlternateScreen put us on the main screen;
+                        // re-enter alternate screen so kterm draws there, not on scrollback.
+                        execute!(terminal.backend_mut(), EnterAlternateScreen)?;
+                        enable_raw_mode()?;
+                        terminal.clear()?;
+                        events.resume();
                     }
+                }
                     InputAction::OpenLogsInLess => {
                         if !app.log_lines.is_empty() {
                             let client_and_pod = if app.entered_from_search {
@@ -957,6 +988,11 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                         _ => {}
                     }
                 }
+            }
+            AppEvent::RelatedResourcesLoaded { request, results } => {
+                // Discards superseded results (user left the view or
+                // re-triggered for a different resource/namespace).
+                app.apply_related_resources(request, results);
             }
             AppEvent::NamespacesLoaded(namespaces) => {
                 // Prepend the "all namespaces" sentinel so it's always the

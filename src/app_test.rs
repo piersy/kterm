@@ -580,7 +580,8 @@ mod tests {
     fn test_restart_confirm_flow() {
         let mut app = app_with_pods();
 
-        app.handle_input(key(KeyCode::Char('r')));
+        // Restart is bound to 'R' (lower-case 'r' opens related components).
+        app.handle_input(key(KeyCode::Char('R')));
         assert_eq!(app.view_mode, ViewMode::Confirm(ConfirmAction::Restart));
 
         let action = app.handle_input(key(KeyCode::Char('y')));
@@ -1016,7 +1017,8 @@ mod tests {
         assert_eq!(app.view_mode, ViewMode::Confirm(ConfirmAction::Delete));
         app.view_mode = ViewMode::Detail;
 
-        app.handle_input(key(KeyCode::Char('r')));
+        // Restart is bound to 'R' (see key remap for related components).
+        app.handle_input(key(KeyCode::Char('R')));
         assert_eq!(app.view_mode, ViewMode::Confirm(ConfirmAction::Restart));
         app.view_mode = ViewMode::Detail;
 
@@ -1041,6 +1043,292 @@ mod tests {
         app.handle_input(key(KeyCode::Char('q')));
         assert_eq!(app.view_mode, ViewMode::List);
         assert!(!app.should_quit);
+    }
+
+    // --- Related components (#26) ---
+
+    fn fake_labelled(kind: &str, name: &str, instance: &str) -> ResourceItem {
+        ResourceItem {
+            name: name.to_string(),
+            namespace: "default".to_string(),
+            status: String::new(),
+            created_at: None,
+            extra: vec![],
+            raw_yaml: format!(
+                "apiVersion: v1\nkind: {}\nmetadata:\n  name: {}\n  labels:\n    app.kubernetes.io/instance: {}\n",
+                kind, name, instance
+            ),
+        }
+    }
+
+    fn app_with_labelled_deployment() -> App {
+        let mut app = App::new();
+        app.focus = Focus::ResourceList;
+        app.selected_resource_types = vec![ResourceType::Deployments];
+        app.resources_by_type.insert(
+            ResourceType::Deployments,
+            vec![fake_labelled("Deployment", "web", "my-app")],
+        );
+        app.select_first_row();
+        app
+    }
+
+    #[test]
+    fn test_resource_item_label_parsing() {
+        let item = fake_labelled("Pod", "web-0", "my-app");
+        assert_eq!(
+            item.label("app.kubernetes.io/instance").as_deref(),
+            Some("my-app")
+        );
+        assert_eq!(item.label("nonexistent"), None);
+        // A resource with no labels yields None.
+        assert_eq!(
+            fake_pod("p", "Running").label("app.kubernetes.io/instance"),
+            None
+        );
+    }
+
+    #[test]
+    fn test_r_opens_related_view_when_labelled() {
+        let mut app = app_with_labelled_deployment();
+        let action = app.handle_input(key(KeyCode::Char('r')));
+        assert_eq!(action, InputAction::RelatedComponents);
+        assert_eq!(app.view_mode, ViewMode::Related);
+        assert_eq!(app.related_label_value, "my-app");
+        assert_eq!(app.related_namespace, "default");
+        assert!(app.related_loading);
+        assert_eq!(app.previous_view, ViewMode::List);
+    }
+
+    #[test]
+    fn test_r_without_label_shows_error_and_stays_in_list() {
+        // Pods built by app_with_pods carry no instance label.
+        let mut app = app_with_pods();
+        let action = app.handle_input(key(KeyCode::Char('r')));
+        assert_eq!(action, InputAction::None);
+        assert_eq!(app.view_mode, ViewMode::List);
+        assert!(app.error_popup);
+    }
+
+    #[test]
+    fn test_set_related_resources_drives_display_rows() {
+        let mut app = App::new();
+        app.previous_view = ViewMode::List;
+        app.view_mode = ViewMode::Related;
+        app.related_loading = true;
+        app.set_related_resources(vec![
+            (
+                ResourceType::Pods,
+                vec![
+                    fake_labelled("Pod", "web-0", "my-app"),
+                    fake_labelled("Pod", "web-1", "my-app"),
+                ],
+            ),
+            (
+                ResourceType::Services,
+                vec![fake_labelled("Service", "web", "my-app")],
+            ),
+        ]);
+        assert!(!app.related_loading);
+        assert_eq!(
+            app.related_types,
+            vec![ResourceType::Pods, ResourceType::Services]
+        );
+        // display_rows() is view-aware: 2 dividers + 3 resources.
+        assert_eq!(app.display_rows().len(), 5);
+        // selected_resource() resolves against the related dataset.
+        let (item, rt) = app.selected_resource().expect("a related row selected");
+        assert_eq!(rt, ResourceType::Pods);
+        assert_eq!(item.name, "web-0");
+    }
+
+    #[test]
+    fn test_related_esc_restores_previous_view() {
+        let mut app = App::new();
+        app.view_mode = ViewMode::Related;
+        app.previous_view = ViewMode::List;
+        app.related_loading = true;
+        app.set_related_resources(vec![(
+            ResourceType::Pods,
+            vec![fake_labelled("Pod", "p", "a")],
+        )]);
+
+        app.handle_input(key(KeyCode::Esc));
+        assert_eq!(app.view_mode, ViewMode::List);
+        assert!(app.related_by_type.is_empty());
+        assert!(app.related_types.is_empty());
+    }
+
+    #[test]
+    fn test_related_navigation_moves_selection() {
+        let mut app = App::new();
+        app.view_mode = ViewMode::Related;
+        app.previous_view = ViewMode::List;
+        app.set_related_resources(vec![(
+            ResourceType::Pods,
+            vec![
+                fake_labelled("Pod", "p0", "a"),
+                fake_labelled("Pod", "p1", "a"),
+            ],
+        )]);
+        let first = app.table_state.selected();
+        app.handle_input(key(KeyCode::Char('j')));
+        assert_ne!(first, app.table_state.selected());
+    }
+
+    #[test]
+    fn test_open_related_bumps_request_id() {
+        let mut app = app_with_labelled_deployment();
+        let before = app.related_request;
+        app.handle_input(key(KeyCode::Char('r')));
+        assert_eq!(app.related_request, before + 1);
+    }
+
+    #[test]
+    fn test_apply_related_resources_rejects_stale_request() {
+        let mut app = App::new();
+        app.view_mode = ViewMode::Related;
+        app.previous_view = ViewMode::List;
+        app.related_loading = true;
+        app.related_request = 5;
+
+        // A result tagged with a superseded request id is discarded: this
+        // guards against a late fetch from a different namespace whose label
+        // value happens to collide.
+        let applied = app.apply_related_resources(
+            4,
+            vec![(ResourceType::Pods, vec![fake_labelled("Pod", "stale", "a")])],
+        );
+        assert!(!applied);
+        assert!(app.related_by_type.is_empty());
+        assert!(app.related_loading, "still waiting for the live request");
+
+        // The matching request id is applied.
+        let applied = app.apply_related_resources(
+            5,
+            vec![(ResourceType::Pods, vec![fake_labelled("Pod", "live", "a")])],
+        );
+        assert!(applied);
+        assert!(!app.related_loading);
+        assert_eq!(app.related_by_type[&ResourceType::Pods][0].name, "live");
+    }
+
+    #[test]
+    fn test_apply_related_resources_rejected_when_not_in_related_view() {
+        let mut app = App::new();
+        // Not in the related view (e.g. user already pressed Esc).
+        app.view_mode = ViewMode::List;
+        app.related_loading = true;
+        app.related_request = 1;
+        let applied = app.apply_related_resources(1, vec![]);
+        assert!(!applied);
+    }
+
+    // --- Related components: interaction (#26 follow-up) ---
+
+    /// Enter the related view from a labelled deployment, then simulate the
+    /// fetch landing with a pod (first row) and a deployment.
+    fn app_in_related_view() -> App {
+        let mut app = app_with_labelled_deployment();
+        app.handle_input(key(KeyCode::Char('r')));
+        assert_eq!(app.view_mode, ViewMode::Related);
+        app.set_related_resources(vec![
+            (
+                ResourceType::Pods,
+                vec![fake_labelled("Pod", "web-0", "my-app")],
+            ),
+            (
+                ResourceType::Deployments,
+                vec![fake_labelled("Deployment", "web", "my-app")],
+            ),
+        ]);
+        app
+    }
+
+    #[test]
+    fn test_related_enter_drills_into_related_detail() {
+        let mut app = app_in_related_view();
+        let action = app.handle_input(key(KeyCode::Enter));
+        assert_eq!(action, InputAction::Describe);
+        assert_eq!(app.view_mode, ViewMode::Detail);
+        assert!(app.entered_from_related, "still in related context");
+        // selected_resource resolves the related pod, not live data.
+        let (item, rt) = app.selected_resource().expect("a related row selected");
+        assert_eq!(rt, ResourceType::Pods);
+        assert_eq!(item.name, "web-0");
+    }
+
+    #[test]
+    fn test_related_detail_esc_returns_to_related_then_list() {
+        let mut app = app_in_related_view();
+        app.handle_input(key(KeyCode::Enter)); // -> Detail (of a related component)
+        assert_eq!(app.view_mode, ViewMode::Detail);
+
+        app.handle_input(key(KeyCode::Esc)); // back to the related list, not List
+        assert_eq!(app.view_mode, ViewMode::Related);
+        assert!(app.entered_from_related);
+
+        app.handle_input(key(KeyCode::Esc)); // leave the related session entirely
+        assert_eq!(app.view_mode, ViewMode::List);
+        assert!(!app.entered_from_related);
+    }
+
+    #[test]
+    fn test_related_delete_returns_to_related_after_confirm() {
+        let mut app = app_in_related_view();
+        app.handle_input(key(KeyCode::Char('d')));
+        assert_eq!(app.view_mode, ViewMode::Confirm(ConfirmAction::Delete));
+        let action = app.handle_input(key(KeyCode::Char('y')));
+        assert_eq!(action, InputAction::Delete);
+        // Returns to the related list, not the normal list.
+        assert_eq!(app.view_mode, ViewMode::Related);
+        assert!(app.entered_from_related);
+    }
+
+    #[test]
+    fn test_related_logs_for_pod_then_back() {
+        let mut app = app_in_related_view(); // first row is a pod
+        let action = app.handle_input(key(KeyCode::Char('l')));
+        assert_eq!(action, InputAction::StreamLogs);
+        assert_eq!(app.view_mode, ViewMode::Logs);
+
+        let action = app.handle_input(key(KeyCode::Esc));
+        assert_eq!(action, InputAction::StopLogs);
+        assert_eq!(app.view_mode, ViewMode::Related);
+    }
+
+    #[test]
+    fn test_related_edit_and_exec_act_on_related() {
+        let mut app = app_in_related_view(); // pod selected
+        assert_eq!(app.handle_input(key(KeyCode::Char('e'))), InputAction::Edit);
+        assert_eq!(app.handle_input(key(KeyCode::Char('x'))), InputAction::Exec);
+    }
+
+    #[test]
+    fn test_related_scale_from_related_list() {
+        let mut app = app_in_related_view();
+        // Move to the deployment resource row (skips the type divider).
+        app.handle_input(key(KeyCode::Char('j')));
+        let (_, rt) = app.selected_resource().expect("a row selected");
+        assert_eq!(rt, ResourceType::Deployments);
+
+        app.handle_input(key(KeyCode::Char('s')));
+        assert_eq!(app.view_mode, ViewMode::Scale);
+        app.handle_input(key(KeyCode::Char('2')));
+        let action = app.handle_input(key(KeyCode::Enter));
+        assert_eq!(action, InputAction::Scale(2));
+        // Returns to the related list, not the normal list.
+        assert_eq!(app.view_mode, ViewMode::Related);
+    }
+
+    #[test]
+    fn test_related_r_is_noop() {
+        let mut app = app_in_related_view();
+        let req_before = app.related_request;
+        let action = app.handle_input(key(KeyCode::Char('r')));
+        assert_eq!(action, InputAction::None);
+        assert_eq!(app.view_mode, ViewMode::Related);
+        assert_eq!(app.related_request, req_before, "no new fetch issued");
     }
 
     // --- Fuzzy Search Tests ---

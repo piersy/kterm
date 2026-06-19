@@ -15,11 +15,12 @@ fn resource_list_bindings(app: &App) -> String {
     }
     parts.push("d:Delete");
     if rt.map(|t| t.supports_restart()).unwrap_or(app.primary_resource_type().supports_restart()) {
-        parts.push("r:Restart");
+        parts.push("R:Restart");
     }
     if rt.map(|t| t.supports_scale()).unwrap_or(app.primary_resource_type().supports_scale()) {
         parts.push("s:Scale");
     }
+    parts.push("r:Related");
     parts.push("e:Edit");
     if rt.map(|t| t.supports_exec()).unwrap_or(app.primary_resource_type().supports_exec()) {
         parts.push("x:Exec");
@@ -37,12 +38,35 @@ fn detail_bindings(app: &App) -> String {
     }
     parts.push("d:Delete");
     if rt.map(|t| t.supports_restart()).unwrap_or(false) {
-        parts.push("r:Restart");
+        parts.push("R:Restart");
     }
     if rt.map(|t| t.supports_exec()).unwrap_or(false) {
         parts.push("x:Exec");
     }
     parts.push("g/G:Top/Bottom");
+    parts.join("  ")
+}
+
+fn related_bindings(app: &App) -> String {
+    // The related list is fully interactive — same per-resource actions as the
+    // normal list, gated on the highlighted row's type, minus `r` (we are
+    // already viewing related components).
+    let mut parts = vec!["Esc:Back", "j/k:Nav", "Enter:Detail"];
+    let rt = app.selected_row_resource_type();
+    if rt.map(|t| t.supports_logs()).unwrap_or(false) {
+        parts.push("l:Logs");
+    }
+    parts.push("d:Delete");
+    if rt.map(|t| t.supports_restart()).unwrap_or(false) {
+        parts.push("R:Restart");
+    }
+    if rt.map(|t| t.supports_scale()).unwrap_or(false) {
+        parts.push("s:Scale");
+    }
+    parts.push("e:Edit");
+    if rt.map(|t| t.supports_exec()).unwrap_or(false) {
+        parts.push("x:Exec");
+    }
     parts.join("  ")
 }
 
@@ -83,6 +107,10 @@ pub fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
         }
         ViewMode::Logs => "Esc:Back  f:Follow  j/k:Scroll  g/G:Top/Bottom  o:Vim  O:Less",
         ViewMode::Confirm(_) => "y:Confirm  Any other key:Cancel",
+        ViewMode::Related => {
+            bindings_owned = related_bindings(app);
+            &bindings_owned
+        }
         ViewMode::Scale => "Type a number  Enter:Apply  Backspace:Edit  Esc:Cancel",
         ViewMode::Search => "Esc:Back  Down/Up:Nav  Enter:Detail  Type to search...",
     };

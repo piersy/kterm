@@ -486,6 +486,146 @@ pub async fn list_all_resources(
     }
 }
 
+/// Namespaced resource types considered when gathering "related components".
+/// Cluster-scoped types (Nodes, PVs, StorageClasses, Namespaces) are excluded
+/// because they are not owned by a namespaced instance.
+pub const RELATED_RESOURCE_TYPES: &[ResourceType] = &[
+    ResourceType::Deployments,
+    ResourceType::StatefulSets,
+    ResourceType::DaemonSets,
+    ResourceType::ReplicaSets,
+    ResourceType::ReplicationControllers,
+    ResourceType::Pods,
+    ResourceType::Jobs,
+    ResourceType::CronJobs,
+    ResourceType::HorizontalPodAutoscalers,
+    ResourceType::Services,
+    ResourceType::Endpoints,
+    ResourceType::Ingresses,
+    ResourceType::NetworkPolicies,
+    ResourceType::ConfigMaps,
+    ResourceType::Secrets,
+    ResourceType::PersistentVolumeClaims,
+    ResourceType::ServiceAccounts,
+    ResourceType::PodDisruptionBudgets,
+];
+
+/// Gather every related object in `namespace` carrying `label_key=label_value`,
+/// across [`RELATED_RESOURCE_TYPES`]. Returns only the types that have at least
+/// one match, preserving the order of `RELATED_RESOURCE_TYPES`. The per-type
+/// lists run concurrently (like [`count_all_resources`]) so total latency is
+/// one round trip, not the sum. Per-type errors are logged and skipped so one
+/// failing type does not abort the whole view.
+pub async fn list_related_resources(
+    client: Client,
+    namespace: &str,
+    label_key: &str,
+    label_value: &str,
+) -> Vec<(ResourceType, Vec<ResourceItem>)> {
+    let selector = format!("{}={}", label_key, label_value);
+    let fetches = RELATED_RESOURCE_TYPES.iter().map(|&rt| {
+        let client = client.clone();
+        let selector = selector.clone();
+        let namespace = namespace.to_string();
+        async move { (rt, list_namespaced_labelled(client, &namespace, rt, &selector).await) }
+    });
+    // `join_all` preserves input order, so the result keeps the canonical
+    // RELATED_RESOURCE_TYPES ordering.
+    let results = futures::future::join_all(fetches).await;
+    let mut out = Vec::new();
+    for (rt, res) in results {
+        match res {
+            Ok(items) if !items.is_empty() => out.push((rt, items)),
+            Ok(_) => {}
+            Err(e) => {
+                crate::logging::log_error(&format!("Related list for {} failed: {}", rt, e))
+            }
+        }
+    }
+    out
+}
+
+/// List a single namespaced resource type filtered by a label selector.
+async fn list_namespaced_labelled(
+    client: Client,
+    namespace: &str,
+    resource_type: ResourceType,
+    selector: &str,
+) -> Result<Vec<ResourceItem>> {
+    match resource_type {
+        ResourceType::Deployments => {
+            list_labelled(ns_api::<Deployment>(client, namespace), selector, deployment_to_resource_item).await
+        }
+        ResourceType::StatefulSets => {
+            list_labelled(ns_api::<StatefulSet>(client, namespace), selector, statefulset_to_resource_item).await
+        }
+        ResourceType::DaemonSets => {
+            list_labelled(ns_api::<DaemonSet>(client, namespace), selector, daemonset_to_resource_item).await
+        }
+        ResourceType::ReplicaSets => {
+            list_labelled(ns_api::<ReplicaSet>(client, namespace), selector, replicaset_to_resource_item).await
+        }
+        ResourceType::ReplicationControllers => {
+            list_labelled(ns_api::<ReplicationController>(client, namespace), selector, replication_controller_to_resource_item).await
+        }
+        ResourceType::Pods => {
+            list_labelled(ns_api::<Pod>(client, namespace), selector, pod_to_resource_item).await
+        }
+        ResourceType::Jobs => {
+            list_labelled(ns_api::<Job>(client, namespace), selector, job_to_resource_item).await
+        }
+        ResourceType::CronJobs => {
+            list_labelled(ns_api::<CronJob>(client, namespace), selector, cronjob_to_resource_item).await
+        }
+        ResourceType::HorizontalPodAutoscalers => {
+            list_labelled(ns_api::<HorizontalPodAutoscaler>(client, namespace), selector, hpa_to_resource_item).await
+        }
+        ResourceType::Services => {
+            list_labelled(ns_api::<Service>(client, namespace), selector, service_to_resource_item).await
+        }
+        ResourceType::Endpoints => {
+            list_labelled(ns_api::<Endpoints>(client, namespace), selector, endpoints_to_resource_item).await
+        }
+        ResourceType::Ingresses => {
+            list_labelled(ns_api::<Ingress>(client, namespace), selector, ingress_to_resource_item).await
+        }
+        ResourceType::NetworkPolicies => {
+            list_labelled(ns_api::<NetworkPolicy>(client, namespace), selector, network_policy_to_resource_item).await
+        }
+        ResourceType::ConfigMaps => {
+            list_labelled(ns_api::<ConfigMap>(client, namespace), selector, configmap_to_resource_item).await
+        }
+        ResourceType::Secrets => {
+            list_labelled(ns_api::<Secret>(client, namespace), selector, secret_to_resource_item).await
+        }
+        ResourceType::PersistentVolumeClaims => {
+            list_labelled(ns_api::<PersistentVolumeClaim>(client, namespace), selector, pvc_to_resource_item).await
+        }
+        ResourceType::ServiceAccounts => {
+            list_labelled(ns_api::<ServiceAccount>(client, namespace), selector, serviceaccount_to_resource_item).await
+        }
+        ResourceType::PodDisruptionBudgets => {
+            list_labelled(ns_api::<PodDisruptionBudget>(client, namespace), selector, pdb_to_resource_item).await
+        }
+        // Other (e.g. cluster-scoped) types are not gathered as related.
+        _ => Ok(Vec::new()),
+    }
+}
+
+/// List helper that applies a label selector, mirroring [`list_generic`].
+async fn list_labelled<T, F>(api: Api<T>, selector: &str, converter: F) -> Result<Vec<ResourceItem>>
+where
+    T: Resource<DynamicType = ()> + Clone + DeserializeOwned + Debug + Send + Sync + 'static,
+    F: Fn(&T) -> ResourceItem,
+{
+    let lp = ListParams::default().labels(selector);
+    let list = tokio::time::timeout(K8S_TIMEOUT, api.list(&lp))
+        .await
+        .context("request timed out (cluster may be unreachable)")?
+        .context("API request failed")?;
+    Ok(list.items.iter().map(converter).collect())
+}
+
 async fn count_generic<T>(api: Api<T>) -> Result<usize>
 where
     T: Resource<DynamicType = ()> + Clone + DeserializeOwned + Debug + Send + Sync + 'static,
