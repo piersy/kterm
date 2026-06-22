@@ -242,8 +242,10 @@ mod tests {
         assert!(is_all_namespaces(app.current_namespace()));
     }
 
-    #[test]
-    fn test_namespace_all_stays_first_after_fuzzy_filter() {
+    /// Issue #24: the sentinel is pinned first only until the user types a
+    /// filter. A query that does not match `<all namespaces>` must order
+    /// results by relevance and drop the (non-matching) sentinel.
+    fn ns_filter_app() -> App {
         let mut app = App::new();
         app.namespaces = vec![
             ALL_NAMESPACES_LABEL.to_string(),
@@ -253,17 +255,82 @@ mod tests {
         app.selected_namespaces.clear();
         app.selected_namespaces.insert(1);
         app.focus = Focus::ResourceList;
+        app
+    }
 
+    #[test]
+    fn test_namespace_all_pinned_first_when_no_filter() {
+        let mut app = ns_filter_app();
+        app.handle_input(key(KeyCode::Char('n')));
+        assert_eq!(
+            app.dropdown_filtered.first().copied(),
+            Some(0),
+            "with no filter, all-namespaces is pinned first"
+        );
+    }
+
+    #[test]
+    fn test_namespace_all_ordered_by_relevance_after_filter() {
+        let mut app = ns_filter_app();
         app.handle_input(key(KeyCode::Char('n')));
         // Type a filter that does NOT match the sentinel label.
         app.handle_input(key(KeyCode::Char('b')));
         app.handle_input(key(KeyCode::Char('e')));
 
-        assert_eq!(
-            app.dropdown_filtered.first().copied(),
-            Some(0),
-            "all-namespaces must remain first even when fuzzy filter is active"
+        // "beta" (index 2) is the best match and should be first; the
+        // non-matching sentinel (index 0) must not be pinned or shown.
+        assert_eq!(app.dropdown_filtered.first().copied(), Some(2));
+        assert!(
+            !app.dropdown_filtered.contains(&0),
+            "non-matching all-namespaces sentinel should be filtered out"
         );
+    }
+
+    #[test]
+    fn test_namespace_all_ranked_below_better_match() {
+        // A real namespace that out-scores the sentinel on the query "all"
+        // must rank above it: the sentinel is score-ranked, not force-pinned.
+        let mut app = App::new();
+        app.namespaces = vec![
+            ALL_NAMESPACES_LABEL.to_string(), // index 0
+            "alpha".to_string(),              // index 1 (no match for "all")
+            "all-tenants".to_string(),        // index 2 (stronger match)
+        ];
+        app.selected_namespaces.clear();
+        app.selected_namespaces.insert(1);
+        app.focus = Focus::ResourceList;
+
+        app.handle_input(key(KeyCode::Char('n')));
+        for c in "all".chars() {
+            app.handle_input(key(KeyCode::Char(c)));
+        }
+
+        let pos_sentinel = app.dropdown_filtered.iter().position(|&i| i == 0);
+        let pos_real = app.dropdown_filtered.iter().position(|&i| i == 2);
+        // Sentinel still appears (it matches "all")...
+        assert!(pos_sentinel.is_some(), "sentinel should match 'all'");
+        // ...but ranks below the closer "all-tenants" match.
+        assert!(
+            pos_real < pos_sentinel,
+            "the closer namespace match must rank above the sentinel, got filtered={:?}",
+            app.dropdown_filtered
+        );
+    }
+
+    #[test]
+    fn test_namespace_all_repinned_after_backspace_to_empty() {
+        let mut app = ns_filter_app();
+        app.handle_input(key(KeyCode::Char('n')));
+        // Filter so the non-matching sentinel is dropped.
+        app.handle_input(key(KeyCode::Char('b')));
+        app.handle_input(key(KeyCode::Char('e')));
+        assert!(!app.dropdown_filtered.contains(&0));
+
+        // Backspace back to an empty query: the sentinel is pinned again.
+        app.handle_input(key(KeyCode::Backspace));
+        app.handle_input(key(KeyCode::Backspace));
+        assert!(app.dropdown_query.is_empty());
+        assert_eq!(app.dropdown_filtered.first().copied(), Some(0));
     }
 
     #[test]
