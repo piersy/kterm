@@ -410,10 +410,14 @@ impl App {
             self.dropdown_filtered = scored.into_iter().map(|(i, _)| i).collect();
         }
 
-        // Pin the "all namespaces" entry to the top of the namespace selector,
-        // regardless of fuzzy-match score. It is always shown so the user can
-        // select cluster-wide scoping at any time.
-        if matches!(self.focus, Focus::Selector(SelectorTarget::Namespace)) {
+        // Pin the "all namespaces" entry to the top of the namespace selector
+        // only while no filter has been typed, so the user can reach
+        // cluster-wide scoping immediately on opening the selector. Once a
+        // query is entered, the entry is ranked (and filtered) by fuzzy-match
+        // score like any other namespace.
+        if self.dropdown_query.is_empty()
+            && matches!(self.focus, Focus::Selector(SelectorTarget::Namespace))
+        {
             if let Some(all_idx) = items
                 .iter()
                 .position(|it| it == ALL_NAMESPACES_LABEL)
